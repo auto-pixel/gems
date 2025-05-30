@@ -1,4 +1,4 @@
-name: Facebook Ads Scraper
+name: gems
 
 on:
   schedule:
