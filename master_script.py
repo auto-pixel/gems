@@ -135,10 +135,6 @@ def main():
     # Define scripts to run in order
     scripts = [
         {
-            "name": "facebook-ad-scraper-updated.py", 
-            "description": "Facebook Ad Scraper"
-        },
-        {
             "name": "Ad_details_scraper.py", 
             "description": "Ad Details Scraper"
         },
