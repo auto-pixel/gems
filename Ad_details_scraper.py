@@ -1,7 +1,3 @@
-# Performance tracking - start time
-import time
-start_time = time.time()
-
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.firefox.service import Service
@@ -11,6 +7,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import NoSuchElementException, TimeoutException
 from selenium.webdriver.common.action_chains import ActionChains
 from webdriver_manager.firefox import GeckoDriverManager
+import time
 import re
 from datetime import datetime
 from urllib.parse import unquote, urlparse
@@ -24,13 +21,6 @@ import sys
 import random
 from datetime import datetime
 
-# Import for concurrent processing
-from concurrent.futures import ThreadPoolExecutor, as_completed
-import threading
-
-# Global lock for thread-safe operations
-thread_lock = threading.Lock()
-
 # Import anti-detection utilities
 from fb_antidetect_utils import (
     ProxyManager,
@@ -41,31 +31,36 @@ from fb_antidetect_utils import (
     get_current_ip
 )
 
-# Set up logging system - errors only
+# Set up logging system
 log_dir = "logs"
 os.makedirs(log_dir, exist_ok=True)
-log_file = os.path.join(log_dir, "fb_scraper_errors.log")
+log_file = os.path.join(log_dir, f"fb_scraper_ads_details.log")
 
 logging.basicConfig(
-    level=logging.ERROR,  # Only log ERROR level and above
+    level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler(log_file),  # Write to error log file
-        logging.StreamHandler()  # Also show on console
+        logging.FileHandler(log_file),
+        logging.StreamHandler()
     ]
 )
 
-# Function to log messages - prints to console but only writes errors to log file
+# Function to log messages (prints to console and writes to log file)
 def custom_print(message, level=None):
-    """Log a message with timestamp. Only errors are written to log file."""
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    
-    # Always print to console regardless of level
-    print(f"{timestamp} - {message}")
-    
-    # Only log errors to the log file
-    if level is not None and level.lower() == "error":
+    """Log a message with timestamp to both console and log file"""
+    # Default to info level if no level provided
+    if level is None:
+        logging.info(message)
+    elif level.lower() == "info":
+        logging.info(message)
+    elif level.lower() == "warning":
+        logging.warning(message)
+    elif level.lower() == "error":
         logging.error(message)
+    elif level.lower() == "debug":
+        logging.debug(message)
+    else:
+        logging.info(message)
 
 # Platform identification mapping
 PLATFORM_MAPPING = {
@@ -296,15 +291,45 @@ if milk_worksheet:
         ip_col_idx = next_col
         custom_print(f"Added IP Address column to Milk worksheet at index {ip_col_idx}")
         
-    # Update all rows with current IP Address
-    # Get all data rows (excluding header)
+    # Don't update IP addresses for all rows at once - we'll update them individually later
+    # Get all data rows (excluding header) - keep this for other purposes
     all_milk_rows = milk_worksheet.get_all_values()[1:]
-    if all_milk_rows:
-        # Create a list of IP addresses for all rows
-        ip_addresses = [[current_ip]] * len(all_milk_rows)
-        # Update the IP Address column for all rows at once
-        milk_worksheet.update(f'{chr(64 + ip_col_idx)}2:{chr(64 + ip_col_idx)}{len(all_milk_rows) + 1}', ip_addresses)
-        custom_print(f"Updated IP Address column in Milk worksheet with current IP: {current_ip}")
+    
+    # Also check if we need to add Last Update Time column to the Ads Details worksheet
+    if ads_worksheet:
+        ads_headers = ads_worksheet.row_values(1)
+        
+        # Check for Last Update Time column
+        last_update_col_exists = False
+        for i, header in enumerate(ads_headers):
+            if header == "Last Update Time" or header.lower().strip() == "last update time":
+                last_update_col_exists = True
+                last_update_col_idx = i + 1  # Convert to 1-indexed
+                custom_print(f"Found Last Update Time column in Ads Details worksheet at index {last_update_col_idx}")
+                break
+                
+        if not last_update_col_exists:
+            # Add Last Update Time column to Ads Details worksheet
+            next_col = len(ads_headers) + 1
+            ads_worksheet.update_cell(1, next_col, "Last Update Time")
+            last_update_col_idx = next_col
+            custom_print(f"Added Last Update Time column to Ads Details worksheet at index {last_update_col_idx}")
+        
+        # Check for IP Address column
+        ip_addr_col_exists = False
+        for i, header in enumerate(ads_headers):
+            if header == "IP Address" or header.lower().strip() == "ip address":
+                ip_addr_col_exists = True
+                ads_ip_col_idx = i + 1  # Convert to 1-indexed
+                custom_print(f"Found IP Address column in Ads Details worksheet at index {ads_ip_col_idx}")
+                break
+                
+        if not ip_addr_col_exists:
+            # Add IP Address column to Ads Details worksheet
+            next_col = len(ads_headers) + 1
+            ads_worksheet.update_cell(1, next_col, "IP Address")
+            ads_ip_col_idx = next_col
+            custom_print(f"Added IP Address column to Ads Details worksheet at index {ads_ip_col_idx}")
     
     urls, page_names = extract_urls_from_milk_worksheet(milk_worksheet)
     
@@ -321,95 +346,30 @@ else:
 all_ads_data = {}
 
 # Implement URL randomization to avoid detection patterns
-# Shuffle the URL list to randomize processing order
-custom_print("Randomizing URL processing order to avoid detection patterns...")
-random.shuffle(urls)
-custom_print(f"Will process {len(urls)} URLs in randomized order")
+# Use a copy of the URLs for randomization but track which ones were processed
+custom_print("Setting up randomized URL processing order to avoid detection patterns...")
+urls_to_process = urls.copy()  # Keep original list intact
+processed_urls = set()  # Track which URLs have been processed
+custom_print(f"Will process {len(urls_to_process)} URLs in randomized order")
 
-# Function to process a single URL
-def process_url(url_data):
-    url_index, url = url_data
-    url_start_time = time.time()
+# Process each URL from the Milk worksheet one at a time and update the sheet after each
+# Continue until all URLs have been processed
+url_index = 0
+while len(processed_urls) < len(urls):
+    # Randomly select a URL that hasn't been processed yet
+    remaining_urls = [u for u in urls if u not in processed_urls]
+    url = random.choice(remaining_urls)
+    url_index += 1
     
-    # Create thread-local storage for this URL's data
-    url_ads_data = {}
+    custom_print(f"\n===== Processing URL {url_index}/{len(urls)} ({len(processed_urls)+1} of {len(urls)} total) =====")
+    custom_print(f"Opening URL: {url}")
     
-    try:
-        with thread_lock:  # Use lock for thread-safe logging
-            custom_print(f"\n===== Processing URL {url_index}/{len(urls)} =====")
-            custom_print(f"Opening URL: {url}")
-        
-        # Create a dedicated driver for this URL
-        url_driver = create_stealth_driver(
-            use_proxy=(proxy_manager is not None),
-            proxy_manager=proxy_manager,
-            headless=True
-        )
-        
-        # Configure dynamic wait times (variable to appear more human-like)
-        url_wait_time = random.uniform(8, 12)  # Random wait between 8-12 seconds
-        url_wait = WebDriverWait(url_driver, url_wait_time)
-        
-        # Add a small random delay to make parallel requests look more human-like
-        stagger_delay = random.uniform(1, 5)
-        time.sleep(stagger_delay)
-        
-        # Implement the URL processing logic here
-        # For now, just a placeholder showing where the code would go
-        # In a real implementation, this would include all the scraping code
-        
-        # Clean up the driver when done
-        url_driver.quit()
-        
-        # Return the data collected from this URL
-        url_processing_time = time.time() - url_start_time
-        with thread_lock:  # Use lock for thread-safe logging
-            custom_print(f"URL {url_index} processing completed in {url_processing_time:.2f} seconds")
-        
-        return url_index, url_ads_data
-        
-    except Exception as e:
-        with thread_lock:  # Use lock for thread-safe logging
-            custom_print(f"Error processing URL {url_index}: {e}", "error")
-        return url_index, {}
-
-# Configure parallel processing
-is_ci = os.environ.get('CI') == 'true' or os.environ.get('GITHUB_ACTIONS') == 'true'
-max_workers = 1 if is_ci else min(4, len(urls))  # Limit concurrency based on environment
-custom_print(f"Configuring parallel processing with {max_workers} workers")
-
-# Process URLs in parallel or sequentially based on configuration
-if max_workers > 1:
-    custom_print(f"Processing {len(urls)} URLs in parallel with {max_workers} workers")
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        # Submit all URL processing tasks
-        future_to_url = {executor.submit(process_url, (i, url)): (i, url) for i, url in enumerate(urls, 1)}
-        
-        # Process results as they complete
-        for future in as_completed(future_to_url):
-            url_index, url = future_to_url[future]
-            try:
-                idx, url_results = future.result()
-                # Merge results into main data dictionary
-                with thread_lock:
-                    all_ads_data.update(url_results)
-            except Exception as e:
-                custom_print(f"URL {url_index} generated an exception: {e}", "error")
-else:
-    # Process URLs sequentially for safer operation in CI or when few URLs
-    custom_print(f"Processing {len(urls)} URLs sequentially")
-    
-    # Process each URL from the Milk worksheet one at a time and update the sheet after each
-    for url_index, url in enumerate(urls, 1):
-        custom_print(f"\n===== Processing URL {url_index}/{len(urls)} =====")
-        custom_print(f"Opening URL: {url}")
-        
-        # Implement session cooling - add random delays between processing URLs
-        if url_index > 1:
-            # Longer cooling period between URLs
-            cooling_time = random.uniform(15, 30)  # 15-30 seconds between URLs
-            custom_print(f"Adding session cooling period of {cooling_time:.1f} seconds before next URL...")
-            time.sleep(cooling_time)
+    # Implement session cooling - add random delays between processing URLs
+    if url_index > 1:
+        # Shorter cooling period between URLs for faster scraping but still human-like
+        cooling_time = random.uniform(5, 10)  # 5-10 seconds between URLs - faster but still looks human
+        custom_print(f"Adding minimal session cooling period of {cooling_time:.1f} seconds before next URL...")
+        time.sleep(cooling_time)
     
     # Add retry mechanism with proxy rotation
     max_retries = 3
@@ -504,7 +464,6 @@ else:
                     wait = WebDriverWait(driver, random.uniform(8, 12))
                     
                 # Try one last time with direct connection
-                success = False  # Reset success flag
                 try:
                     driver.get(url)
                     time.sleep(random.uniform(5, 8))
@@ -512,24 +471,19 @@ else:
                 except Exception as e:
                     custom_print(f"Failed to load with direct connection: {e}", "error")
                     custom_print(f"Skipping URL {url}", "error")
+                    continue
     
     # If we couldn't load the page after all retries, skip this URL
     if not success:
         custom_print(f"Failed to load URL {url} after multiple attempts. Skipping.", "error")
-    else:
-        # Only process the URL if it loaded successfully
-        # Wait for initial content to load
-        custom_print("Waiting for initial ad content to load...")
-        time.sleep(2)  # Initial wait
+        continue
         
-        # Define variable for storing ad data from this URL
-        ads_data = {}
-        
-        # Start scrolling to load content with human-like behavior
-        custom_print("Starting human-like scrolling to load content...")
-        
-        # Initialize vars needed for our special end-of-results detection
-        element_found = False
+    # Wait for initial content to load
+    custom_print("Waiting for initial ad content to load...")
+    time.sleep(2)  # Initial wait
+    
+    # Define variable for storing ad data from this URL
+    ads_data = {}
     
     # Start scrolling to load content with human-like behavior
     custom_print("Starting human-like scrolling to load content...")
@@ -582,7 +536,169 @@ else:
     # Safety limit check (separate from human-like scrolling function)
     if scroll_count > 500: # Adjust limit as needed
         custom_print("⚠️ Reached maximum scroll limit (500). Stopping scroll.")
+    
+    # Extract the ad count (like "~5 results") from the page
+    custom_print("Extracting ad count from the page...")
+    ad_count = None
+    ad_count_text = ""
+    
+    try:
+        # First try to find the element with role="heading" containing "results"
+        ad_count_element = wait.until(
+            EC.presence_of_element_located((By.XPATH, "//div[@role='heading'][contains(text(), 'results') or contains(text(), 'result')]"))
+        )
+        ad_count_text = ad_count_element.text.strip()
+        custom_print(f"Found ad count text: {ad_count_text}")
         
+        # Extract the numeric part using regex
+        matches = re.search(r'~?(\d+(?:,\d+)?)', ad_count_text)
+        if matches:
+            # Remove commas and convert to int
+            ad_count = int(matches.group(1).replace(',', ''))
+            custom_print(f"Extracted ad count: {ad_count}")
+        else:
+            custom_print(f"Could not extract numeric ad count from: {ad_count_text}", "warning")
+    except (NoSuchElementException, TimeoutException):
+        # If the first method fails, try a more general approach
+        try:
+            ad_count_element = driver.find_element(By.XPATH, "//div[contains(text(), 'results') or contains(text(), 'result')]") 
+            ad_count_text = ad_count_element.text.strip()
+            custom_print(f"Found ad count text (alternate method): {ad_count_text}")
+            
+            # Extract the numeric part using regex
+            matches = re.search(r'~?(\d+(?:,\d+)?)', ad_count_text)
+            if matches:
+                # Remove commas and convert to int
+                ad_count = int(matches.group(1).replace(',', ''))
+                custom_print(f"Extracted ad count: {ad_count}")
+            else:
+                custom_print(f"Could not extract numeric ad count from: {ad_count_text}", "warning")
+        except NoSuchElementException:
+            # Try JavaScript as a last resort
+            try:
+                ad_count_text = driver.execute_script("""
+                    const elements = document.querySelectorAll('div');
+                    for (const el of elements) {
+                        const text = el.textContent.trim();
+                        if (text.includes('results') || text.includes('result')) {
+                            return text;
+                        }
+                    }
+                    return null;
+                """)
+                
+                if ad_count_text:
+                    custom_print(f"Found ad count text (JavaScript method): {ad_count_text}")
+                    matches = re.search(r'~?(\d+(?:,\d+)?)', ad_count_text)
+                    if matches:
+                        ad_count = int(matches.group(1).replace(',', ''))
+                        custom_print(f"JavaScript-extracted ad count: {ad_count}")
+            except Exception as js_error:
+                custom_print(f"JavaScript ad count extraction failed: {str(js_error)}", "warning")
+    except Exception as e:
+        custom_print(f"Error extracting ad count: {e}", "error")
+    
+    # Process URL parameters to get the page_id for tracking in the Milk sheet
+    url_params = {}
+    try:
+        # Extract page_id from URL
+        if "view_all_page_id=" in url:
+            page_id_match = re.search(r'view_all_page_id=(\d+)', url)
+            if page_id_match:
+                url_params['page_id'] = page_id_match.group(1)
+                custom_print(f"Extracted page_id from URL: {url_params['page_id']}")
+    except Exception as e:
+        custom_print(f"Error extracting URL parameters: {e}", "error")
+    
+    # Update the Milk worksheet with the ad count, timestamp, and IP address
+    if milk_worksheet:
+        try:
+            # Get the current headers to find column indices
+            milk_headers = milk_worksheet.row_values(1)
+            milk_column_indices = {}
+            
+            # Find the necessary column indices
+            for i, header in enumerate(milk_headers):
+                # Check for 'no.of ads By Ai' column (exact match with spaces)
+                if header == "no.of ads By Ai":
+                    milk_column_indices['ads_by_ai'] = i + 1  # 1-indexed
+                    custom_print(f"Found 'no.of ads By Ai' column at index {milk_column_indices['ads_by_ai']}")
+                
+                # Check for Last Update Time column
+                if header == "Last Update Time" or header.lower().strip() == "last update time":
+                    milk_column_indices['last_update'] = i + 1  # 1-indexed
+                    custom_print(f"Found 'Last Update Time' column at index {milk_column_indices['last_update']}")
+                
+                # Check for IP Address column
+                if header == "IP Address" or header.lower().strip() == "ip address":
+                    milk_column_indices['ip_address'] = i + 1  # 1-indexed
+                    custom_print(f"Found 'IP Address' column at index {milk_column_indices['ip_address']}")
+                
+                # Find Page Transperancy column for matching
+                if header == "Page Transperancy " or header == "Page Transperancy":
+                    milk_column_indices['page_transperancy'] = i + 1  # 1-indexed
+                    custom_print(f"Found 'Page Transperancy' column at index {milk_column_indices['page_transperancy']}")
+                elif header.lower().strip() in ["page transperancy", "page transparency"]:
+                    milk_column_indices['page_transperancy'] = i + 1  # 1-indexed
+                    custom_print(f"Found 'Page Transperancy' column via fallback at index {milk_column_indices['page_transperancy']}")
+            
+            # Add any missing columns to Milk worksheet
+            if 'ads_by_ai' not in milk_column_indices:
+                next_col = len(milk_headers) + 1
+                milk_worksheet.update_cell(1, next_col, "no.of ads By Ai")
+                milk_column_indices['ads_by_ai'] = next_col
+                custom_print(f"Added 'no.of ads By Ai' column at index {next_col}")
+            
+            if 'last_update' not in milk_column_indices:
+                next_col = len(milk_headers) + 1
+                milk_worksheet.update_cell(1, next_col, "Last Update Time")
+                milk_column_indices['last_update'] = next_col
+                custom_print(f"Added 'Last Update Time' column at index {next_col}")
+            
+            if 'ip_address' not in milk_column_indices:
+                next_col = len(milk_headers) + 1
+                milk_worksheet.update_cell(1, next_col, "IP Address")
+                milk_column_indices['ip_address'] = next_col
+                custom_print(f"Added 'IP Address' column at index {next_col}")
+            
+            # Find the matching row in Milk worksheet for this URL's page_id
+            row_index = None
+            
+            if 'page_transperancy' in milk_column_indices and 'page_id' in url_params:
+                # Get all values in the Page Transperancy column
+                page_trans_values = milk_worksheet.col_values(milk_column_indices['page_transperancy'])
+                
+                # Look for a row that contains this page_id
+                for i, cell_value in enumerate(page_trans_values):
+                    if url_params['page_id'] in cell_value:
+                        row_index = i + 1  # 1-indexed
+                        custom_print(f"Found matching page_id in Milk worksheet at row {row_index}")
+                        break
+            
+            if row_index:
+                # Get current timestamp
+                current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                
+                # Update the no.of ads By Ai column - extract only the number
+                if 'ads_by_ai' in milk_column_indices and ad_count:
+                    # Just use the numeric value
+                    milk_worksheet.update_cell(row_index, milk_column_indices['ads_by_ai'], str(ad_count))
+                    custom_print(f"Updated 'no.of ads By Ai' column with value: {ad_count}")
+                
+                # Update the Last Update Time column
+                if 'last_update' in milk_column_indices:
+                    milk_worksheet.update_cell(row_index, milk_column_indices['last_update'], current_time)
+                    custom_print(f"Updated 'Last Update Time' column with value: {current_time}")
+                
+                # Update the IP Address column
+                if 'ip_address' in milk_column_indices:
+                    milk_worksheet.update_cell(row_index, milk_column_indices['ip_address'], current_ip)
+                    custom_print(f"Updated 'IP Address' column with value: {current_ip}")
+            else:
+                custom_print(f"Could not find a matching row in the Milk worksheet for this URL", "warning")
+        except Exception as e:
+            custom_print(f"Error updating Milk worksheet: {e}", "error")
+    
     # Add random delay after scrolling completes (more human-like)
     custom_print("Adding random delay after scrolling to appear more natural...")
     add_random_delays(2.0, 5.0)
@@ -1127,8 +1243,9 @@ else:
         custom_print(f"Updating Ads Details worksheet with {len(ads_data)} ads from URL {url_index}/{len(urls)}...")
         
         # Get column indices if we don't have them already
+        # Always get the headers to ensure they're defined
+        headers = ads_worksheet.row_values(1)  # Assuming headers are in the first row
         if url_index == 1:  # Only need to do this once
-            headers = ads_worksheet.row_values(1)  # Assuming headers are in the first row
             column_indices = {}
             
             # Preserve exact column names with trailing spaces
@@ -1258,6 +1375,17 @@ else:
                 # no.of ads By Ai - special case with casing preserved
                 elif header == "no.of ads By Ai":
                     row[col_idx] = ''
+                
+                # Last Update Time column
+                elif header == "Last Update Time" or header.lower().strip() == "last update time":
+                    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    row[col_idx] = current_time
+                    custom_print(f"Set column '{header}' to {row[col_idx]}")
+                
+                # IP Address column
+                elif header == "IP Address" or header.lower().strip() == "ip address":
+                    row[col_idx] = current_ip
+                    custom_print(f"Set column '{header}' to {row[col_idx]}")
                 
                 # Library ID column
                 elif header.lower().strip() == "library_id":
@@ -1401,13 +1529,14 @@ else:
                 
                 if not rows_to_update:
                     custom_print("No new data to add after filtering duplicates")
-                    # Nothing to update, skip to next iteration
-                else:
-                    # Find the first empty row
-                    first_col_values = ads_worksheet.col_values(1)
-                    start_row = len(first_col_values) + 1
-                    custom_print(f"Appending data starting at row {start_row}")
-                    custom_print(f"Preparing to add {len(rows_to_update)} new rows to Google Sheet")
+                    # Skip the rest of this block since there's nothing to update
+                    continue
+                
+                # Find the first empty row
+                first_col_values = ads_worksheet.col_values(1)
+                start_row = len(first_col_values) + 1
+                custom_print(f"Appending data starting at row {start_row}")
+                custom_print(f"Preparing to add {len(rows_to_update)} new rows to Google Sheet")
                 
                 # Append the rows
                 ads_worksheet.append_rows(rows_to_update)
@@ -1428,38 +1557,16 @@ else:
         else:
             custom_print(f"No data to update for URL {url_index}/{len(urls)}")
             
-    custom_print(f"Completed processing URL {url_index}/{len(urls)}")
+    # Add this URL to the set of processed URLs
+    processed_urls.add(url)
+    custom_print(f"Completed processing URL {url_index} ({len(processed_urls)} of {len(urls)} total)")
     custom_print("-------------------------------------------")
 
 # Process is complete - all data has been added to the Google Sheet
-# Now create a single JSON file with all processed data
 custom_print("\nAll URLs have been processed successfully")
-custom_print("Creating JSON file with all processed data...")
-try:
-    # Collect all data from all URLs processed
-    all_ads_data = {}
-    for url_data in ads_data.values():
-        all_ads_data[url_data['library_id']] = url_data
-
-    # Write the combined data
-    combined_data = {
-        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "total_ads": len(all_ads_data),
-        "ads_data": all_ads_data
-    }
-    
-    with open("ads_data.json", "w", encoding="utf-8") as outfile:
-        json.dump(combined_data, outfile, ensure_ascii=False, indent=4)
-    
-    custom_print(f"Data exported to ads_data.json with {len(all_ads_data)} total ads.")
-except Exception as e:
-    custom_print(f"Error creating JSON file: {e}")
 
 # Clean up
 driver.quit()
 
-end_time = time.time()
-start_time = globals().get('start_time', time.time())
-total_execution_time = end_time - start_time
-print(f"\nTotal script execution time: {total_execution_time:.2f} seconds.")
-custom_print(f"Completed scraping with {len(all_ads_data)} total ads in {total_execution_time:.2f} seconds")
+total_time = time.time()
+print(f"\nTotal script execution time: {total_time - time.time():.2f} seconds.")
