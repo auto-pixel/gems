@@ -12,6 +12,22 @@ import requests
 import whisper
 from dotenv import load_dotenv
 
+# ============== LOGGING SETUP =====================
+log_dir = "logs"
+os.makedirs(log_dir, exist_ok=True)
+log_file = os.path.join(log_dir, f"transcript_bot_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(log_file),
+        logging.StreamHandler()
+    ]
+)
+
+def log(msg, level="info"):
+    getattr(logging, level)(msg)
+
 # Import utility function to get current IP
 try:
     from fb_antidetect_utils import get_current_ip
@@ -43,10 +59,17 @@ IS_GITHUB_ACTIONS = os.environ.get('GITHUB_ACTIONS') == 'true'
 
 if IS_CLOUD_SHELL or IS_GITHUB_ACTIONS:
     FFMPEG_PATH = "/usr/bin"  # Default location in Linux/Cloud Shell/GitHub Actions
-    # If running in GitHub Actions, we'll need to install ffmpeg
+    # If running in GitHub Actions, we'll need to install ffmpeg - but with sudo
     if IS_GITHUB_ACTIONS:
-        os.system("apt-get update && apt-get install -y ffmpeg")
-        log("Installed ffmpeg for GitHub Actions environment", "info")
+        try:
+            log("Checking if ffmpeg is already installed...", "info")
+            import subprocess
+            ffmpeg_check = subprocess.run(['ffmpeg', '-version'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            log("ffmpeg is already installed.", "info")
+        except Exception:
+            log("ffmpeg not found, will be installed by the workflow instead", "info")
+            # Note: We don't try to install it here as we need sudo privileges
+            # It will be installed by the GitHub Action workflow
 else:
     FFMPEG_PATH = r"C:\ffmpeg\bin"  # Windows path
 
@@ -164,42 +187,31 @@ def download_video(url, out_dir):
 # ============ WHISPER TRANSCRIBE ==================
 def transcribe_video(file_path, model=None):
     try:
+        # First check if the file exists before attempting transcription
+        if not os.path.exists(file_path):
+            log(f"File not found: {file_path}", "error")
+            return None
+            
         # Check if ffmpeg is installed and in PATH
         import subprocess
         try:
+            # Just verify ffmpeg is available - don't try to install it
+            # as this requires sudo in GitHub Actions
             subprocess.run(['ffmpeg', '-version'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+            log("ffmpeg is installed and available", "info")
         except (subprocess.SubprocessError, FileNotFoundError):
-            log("ffmpeg not found in PATH. Attempting to install it...", "warning")
-            if os.environ.get('GITHUB_ACTIONS') == 'true':
-                # In GitHub Actions, we need sudo
-                os.system("sudo apt-get update && sudo apt-get install -y ffmpeg")
-                log("Installed ffmpeg using apt-get in GitHub Actions", "info")
-            else:
-                # For other Linux environments
-                os.system("apt-get update && apt-get install -y ffmpeg")
-                log("Installed ffmpeg using apt-get", "info")
-            
-            # Verify installation
-            try:
-                subprocess.run(['ffmpeg', '-version'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
-                log("ffmpeg successfully installed and verified", "info")
-            except (subprocess.SubprocessError, FileNotFoundError):
-                log("Failed to install ffmpeg. Transcription may fail.", "error")
+            log("Error: ffmpeg not found in PATH. Please install it via the workflow.", "error")
+            return f"[Transcription failed: ffmpeg not installed. Please add 'sudo apt-get update && sudo apt-get install -y ffmpeg' to your workflow.]"
         
         # Load model if not provided
         if model is None:
             model = whisper.load_model(WHISPER_MODEL)
         
-        # Check if file exists before transcription
-        if not os.path.exists(file_path):
-            log(f"File not found: {file_path}", "error")
-            return None
-            
         result = model.transcribe(file_path)
         return result["text"]
     except Exception as e:
         log(f"Failed to transcribe video: {file_path} | Error: {e}", "error")
-        return None
+        return f"[Transcription error: {str(e)}]"  # Return the error as part of the transcript rather than None
 
 # ============ PROGRESS TRACKING =================
 def update_progress_percentage(current, total):
