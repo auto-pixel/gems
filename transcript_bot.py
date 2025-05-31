@@ -3,6 +3,7 @@ import sys
 import time
 import logging
 import tempfile
+import os
 from datetime import datetime
 import gspread
 from google.oauth2.service_account import Credentials
@@ -133,6 +134,26 @@ def transcribe_video(file_path, model=None):
         log(f"Failed to transcribe video: {file_path} | Error: {e}", "error")
         return None
 
+# ============ PROGRESS TRACKING =================
+def update_progress_percentage(current, total):
+    """Print a progress bar for the transcript bot execution."""
+    if total > 0:
+        progress_percentage = (current / total) * 100
+        progress_bar = f"[{'=' * int(progress_percentage / 2)}{' ' * (50 - int(progress_percentage / 2))}] {progress_percentage:.1f}%"
+        
+        # Check if running from master script to use the appropriate format
+        running_from_master = os.environ.get('RUNNING_FROM_MASTER_SCRIPT') == 'true'
+        
+        if running_from_master:
+            # When running from master script, use GitHub Actions group format
+            print(f"\n::group::PROGRESS UPDATE [transcript_bot]\n{progress_bar}\nProcessed: {current}/{total} videos\n::endgroup::")
+        else:
+            # When running standalone, use a simpler format that's still clear
+            print(f"\nPROGRESS [transcript_bot]: {progress_percentage:.1f}% ({current}/{total} videos)\n{progress_bar}")
+            
+        # This ensures the progress is visible in GitHub Actions logs
+        sys.stdout.flush()
+
 # ============ MAIN BOT LOGIC ======================
 def main():
     log("==== TRANSCRIPT BOT START ====")
@@ -194,6 +215,9 @@ def main():
     failed = 0
     total_videos = len(video_rows)
     log(f"Starting to process all {total_videos} videos...")
+    
+    # Initialize progress tracking
+    update_progress_percentage(processed, total_videos)
     for row in video_rows:
         if processed >= BATCH_SIZE:
             break
@@ -255,6 +279,10 @@ def main():
             transcript_sheet.append_row(new_row)
             log(f"Processed and updated transcript for library_id={lib_id}")
             processed += 1
+            
+            # Update progress after each successful processing
+            update_progress_percentage(processed, total_videos)
+            
             if processed % 10 == 0:  # Log progress every 10 videos
                 log(f"Progress: {processed}/{total_videos} videos processed ({(processed/total_videos)*100:.1f}%)")
     log(f"All done! Successfully processed: {processed}, Failed: {failed}, Total: {total_videos}")
