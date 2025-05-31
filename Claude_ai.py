@@ -27,6 +27,11 @@ CLAUDE_API_KEY = os.environ.get("CLAUDE_API_KEY")
 if not CLAUDE_API_KEY and os.path.exists(".env"):
     load_dotenv()
     CLAUDE_API_KEY = os.environ.get("CLAUDE_API_KEY")
+    
+    # Clean the API key if it exists
+    if CLAUDE_API_KEY:
+        # Remove any whitespace, quotes, or other unwanted characters
+        CLAUDE_API_KEY = CLAUDE_API_KEY.strip().strip('"').strip("'")
 
 # If still not found, you can set it directly here for testing
 # CLAUDE_API_KEY = "your-api-key-here"  # Uncomment and replace with your key
@@ -54,7 +59,8 @@ MARKETING_ELEMENTS = [
     "Key_Visuals",
     "Duration_Recommendation",
     "Thumbnail_Description",
-    "claude Last Update Time"
+    "claude Last Update Time",
+    "IP Address Claude"  # Use a unique column name to avoid duplicate headers
 ]
 
 # Handle trailing spaces in column names
@@ -141,7 +147,7 @@ def ensure_marketing_element_headers(sheet):
             col_count += 1
             # Convert column number to letter (1->A, 2->B, etc.)
             col_letter = gspread.utils.rowcol_to_a1(1, col_count)[:-1]
-            sheet.update(f"{col_letter}1", element)
+            sheet.update(values=[[element]], range_name=f"{col_letter}1")  # Fix: Use named arguments in correct order
             log(f"Added header column '{element}'")
             
         log(f"Added {len(new_headers)} marketing element columns to the sheet")
@@ -161,6 +167,33 @@ def ensure_marketing_element_headers(sheet):
             sys.exit(1)
     
     return transcript_idx + 1, element_indices  # 1-indexed for Google Sheets API
+
+# Function to get current IP address
+def get_current_ip():
+    """Get the current external IP address using an IP service"""
+    import requests
+    try:
+        # Try different IP services in case one is down
+        services = [
+            'https://api.ipify.org',
+            'https://ipinfo.io/ip',
+            'https://api.myip.com',
+            'https://ip.42.pl/raw'
+        ]
+        
+        for service in services:
+            try:
+                response = requests.get(service, timeout=5)
+                if response.status_code == 200:
+                    return response.text.strip()
+            except Exception:
+                continue
+                
+        # If all services fail, return a placeholder
+        return "Could not determine IP"
+    except Exception as e:
+        log(f"Error getting IP address: {e}", "warning")
+        return "Error getting IP"
 
 # ============ CLAUDE API ANALYSIS =================
 def init_claude_client():
@@ -186,8 +219,20 @@ def init_claude_client():
             sys.exit(1)
     
     try:
-        client = anthropic.Anthropic(api_key=CLAUDE_API_KEY)
-        return client
+        # Mask the API key for logging (show only first 8 and last 4 chars)
+        if CLAUDE_API_KEY:
+            masked_key = CLAUDE_API_KEY[:8] + '*****' + CLAUDE_API_KEY[-4:] if len(CLAUDE_API_KEY) > 12 else '*****'
+            log(f"Initializing Claude with API key: {masked_key} (length: {len(CLAUDE_API_KEY)})")
+            
+            # Strip any leading/trailing whitespace from the API key
+            clean_api_key = CLAUDE_API_KEY.strip()
+            log(f"Key after stripping whitespace: {clean_api_key[:8] + '*****' + clean_api_key[-4:] if len(clean_api_key) > 12 else '*****'} (length: {len(clean_api_key)})")
+            
+            client = anthropic.Anthropic(api_key=clean_api_key)
+            return client
+        else:
+            log("API key is empty or None", "error")
+            sys.exit(1)
     except Exception as e:
         log(f"Failed to initialize Claude AI client: {e}", "error")
         sys.exit(1)
@@ -196,6 +241,12 @@ def analyze_transcript_with_claude(client, transcript):
     """Analyze transcript using Claude AI API"""
     if not transcript or transcript.strip() == "":
         return None
+        
+    # Debug the API key one more time before making the API call
+    api_key = client.api_key if hasattr(client, 'api_key') else "<no api_key attribute>"
+    if api_key:
+        masked_key = api_key[:8] + '*****' + api_key[-4:] if len(api_key) > 12 else '*****'
+        log(f"Using API key in request: {masked_key} (length: {len(api_key)})")
     
     prompt = f"""
 Analyze this ad transcript and provide concise, specific insights for each category:
@@ -265,14 +316,16 @@ def update_progress_percentage(current, total):
     """Print a progress bar for the Claude AI script execution."""
     if total > 0:
         progress_percentage = (current / total) * 100
-        progress_bar = f"[{'=' * int(progress_percentage / 2)}{' ' * (50 - int(progress_percentage / 2))}] {progress_percentage:.1f}%"
+        # Use simple ASCII characters for progress bar to avoid encoding issues
+        progress_bar = f"[{'#' * int(progress_percentage / 2)}{'-' * (50 - int(progress_percentage / 2))}] {progress_percentage:.1f}%"
         
         # Check if running from master script to use the appropriate format
         running_from_master = os.environ.get('RUNNING_FROM_MASTER_SCRIPT') == 'true'
         
         if running_from_master:
-            # When running from master script, use GitHub Actions group format
-            print(f"\n::group::PROGRESS UPDATE [Claude_ai]\n{progress_bar}\nProcessed: {current}/{total} transcripts\n::endgroup::")
+            # When running from master script, simplified output for central display
+            print(f"PROGRESS [Claude_ai]: {progress_bar} ({current}/{total} transcripts)")
+            sys.stdout.flush()
         else:
             # When running standalone, use a simpler format that's still clear
             print(f"\nPROGRESS [Claude_ai]: {progress_percentage:.1f}% ({current}/{total} transcripts)\n{progress_bar}")
@@ -322,7 +375,7 @@ def main():
         any_elements_filled = any(
             row.get(element, '').strip() != ''
             for element in MARKETING_ELEMENTS
-            if element != "claude Last Update Time"  # Exclude the timestamp column
+            if element != "claude Last Update Time" and element != "IP Address Claude"  # Exclude timestamp and IP columns
         )
         
         if any_elements_filled:
@@ -341,7 +394,6 @@ def main():
             log(f"Failed to analyze transcript in row {idx}", "error")
             failed += 1
             continue
-            
         # Update the sheet with the analysis
         try:
             for element, value in analysis.items():
@@ -357,6 +409,18 @@ def main():
                 sheet.update_cell(idx, timestamp_col_idx, now)
                 time.sleep(0.2)  # Avoid rate limiting
             
+            # Add IP address to the IP Address Claude column
+            if "IP Address Claude" in element_indices:
+                try:
+                    # Try to get current IP address
+                    ip_address = get_current_ip()
+                    ip_col_idx = element_indices["IP Address Claude"]
+                    sheet.update_cell(idx, ip_col_idx, ip_address)
+                    log(f"Updated IP Address Claude column with: {ip_address}")
+                    time.sleep(0.2)  # Avoid rate limiting
+                except Exception as e:
+                    log(f"Failed to update IP Address Claude column: {e}", "warning")
+            
             log(f"Updated row {idx} with analysis")
             processed += 1
             processed_count += 1
@@ -369,10 +433,9 @@ def main():
         except Exception as e:
             log(f"Failed to update row {idx}: {e}", "error")
             failed += 1
-            
+    
     log(f"All done! Successfully processed: {processed}, Failed: {failed}, Total: {len(all_data)}")
     log("==== TRANSCRIPT ANALYZER END ====")
 
 if __name__ == "__main__":
     main()
-
