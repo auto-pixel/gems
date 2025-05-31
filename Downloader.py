@@ -3,6 +3,8 @@ import re
 import time
 import logging
 import requests
+import os
+import sys
 from datetime import datetime
 import gspread
 from google.oauth2.service_account import Credentials
@@ -175,6 +177,25 @@ def sanitize_filename(filename):
     
     return sanitized or f"unnamed_{uuid.uuid4().hex[:8]}"
 
+def update_progress_percentage(current, total):
+    """Print a progress bar for the media downloader execution."""
+    if total > 0:
+        progress_percentage = (current / total) * 100
+        progress_bar = f"[{'=' * int(progress_percentage / 2)}{' ' * (50 - int(progress_percentage / 2))}] {progress_percentage:.1f}%"
+        
+        # Check if running from master script to use the appropriate format
+        running_from_master = os.environ.get('RUNNING_FROM_MASTER_SCRIPT') == 'true'
+        
+        if running_from_master:
+            # When running from master script, use GitHub Actions group format
+            print(f"\n::group::PROGRESS UPDATE [Downloader]\n{progress_bar}\nProcessed: {current}/{total} media files\n::endgroup::")
+        else:
+            # When running standalone, use a simpler format that's still clear
+            print(f"\nPROGRESS [Downloader]: {progress_percentage:.1f}% ({current}/{total} media files)\n{progress_bar}")
+            
+        # This ensures the progress is visible in GitHub Actions logs
+        sys.stdout.flush()
+
 def process_sheet_data():
     """Main function to process sheet data and download media"""
     try:
@@ -237,11 +258,17 @@ def process_sheet_data():
         # Process each row (skip header row)
         total_rows = len(all_data) - 1
         successful_downloads = 0
+        processed_rows = 0
+        
+        # Initialize progress tracking
+        update_progress_percentage(processed_rows, total_rows)
         
         for row_idx, row in enumerate(all_data[1:], 1):
             try:
                 if row_idx % 10 == 0 or row_idx == 1:
                     log_message(f"Processing row {row_idx}/{total_rows}")
+                    # Also update progress for GitHub Actions
+                    update_progress_percentage(processed_rows, total_rows)
                 
                 # Extract required data
                 media_url = row[media_url_idx].strip() if media_url_idx < len(row) else ""
@@ -339,8 +366,15 @@ def process_sheet_data():
                 # Add a small delay to avoid overloading servers
                 time.sleep(0.5)
                 
+                # Update progress after each row
+                processed_rows += 1
+                update_progress_percentage(processed_rows, total_rows)
+                
             except Exception as e:
                 log_message(f"Error processing row {row_idx}: {e}", "error")
+                # Update progress even for failed items
+                processed_rows += 1
+                update_progress_percentage(processed_rows, total_rows)
         
         log_message(f"Process complete. Successfully downloaded {successful_downloads} out of {total_rows} media files.")
         
