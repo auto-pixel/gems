@@ -112,7 +112,7 @@ jobs:
           "
       
       - name: Run master script
-        run: python master_script.py
+        run: python transcript_bot.py
       
       - name: Upload results
         uses: actions/upload-artifact@v4
