@@ -366,9 +366,9 @@ while len(processed_urls) < len(urls):
     
     # Implement session cooling - add random delays between processing URLs
     if url_index > 1:
-        # Shorter cooling period between URLs for faster scraping but still human-like
-        cooling_time = random.uniform(5, 10)  # 5-10 seconds between URLs - faster but still looks human
-        custom_print(f"Adding minimal session cooling period of {cooling_time:.1f} seconds before next URL...")
+        # Ultra-minimal cooling period between URLs for fastest scraping
+        cooling_time = random.uniform(0.5, 3.5)  # 0.5-3.5 seconds between URLs - ultra fast
+        custom_print(f"Adding ultra-minimal cooling period of {cooling_time:.1f} seconds before next URL...")
         time.sleep(cooling_time)
     
     # Add retry mechanism with proxy rotation
@@ -406,27 +406,28 @@ while len(processed_urls) < len(urls):
             driver.get(url)
             custom_print(f"Navigating to URL directly")
             
-            # Vary user behavior patterns - sometimes wait longer before interaction
-            if random.random() < 0.3:  # 30% chance of longer initial wait
-                custom_print("Using extended initial waiting pattern...")
-                wait_time = random.uniform(4.0, 7.0)
-                add_random_delays(wait_time, wait_time + 1.0)
+            # Ultra-minimal wait times for fastest scraping
+            if random.random() < 0.05:  # 5% chance of slightly longer wait
+                custom_print("Using minimal extended waiting pattern...")
+                wait_time = random.uniform(0.5, 0.8)
+                add_random_delays(wait_time, wait_time + 0.2)
             else:
-                add_random_delays(1.5, 3.0)
+                add_random_delays(0.1, 0.3)  # Extremely short delays
                 
-            # Add randomized mouse behavior patterns
-            num_movements = random.randint(2, 5)
-            simulate_random_mouse_movements(driver, num_movements=num_movements)
+            # Ultra-minimal mouse behavior - very rarely
+            if random.random() < 0.1:  # 10% chance to do any movement
+                num_movements = random.randint(1, 2)  # Minimal movements
+                simulate_random_mouse_movements(driver, num_movements=num_movements)
             
-            # Wait for initial content to load with random delay
-            wait_time = random.uniform(3, 7)
+            # Ultra-minimal wait for initial content to load
+            wait_time = random.uniform(0.3, 0.8)  # Ultra-short wait
             custom_print(f"Waiting {wait_time:.1f} seconds for content to load...")
             time.sleep(wait_time)
             
             # Check if page loaded properly (look for a known element)
             try:
-                # Wait for an element that should be present on a properly loaded page
-                WebDriverWait(driver, 10).until(
+                # Wait for an element that should be present on a properly loaded page with shorter timeout
+                WebDriverWait(driver, 5).until(
                     EC.presence_of_element_located((By.XPATH, "//div[contains(@class, 'x6s0dn4')]"))
                 )
                 success = True
@@ -466,7 +467,7 @@ while len(processed_urls) < len(urls):
                 # Try one last time with direct connection
                 try:
                     driver.get(url)
-                    time.sleep(random.uniform(5, 8))
+                    time.sleep(random.uniform(1.5, 3))
                     success = True
                 except Exception as e:
                     custom_print(f"Failed to load with direct connection: {e}", "error")
@@ -478,32 +479,266 @@ while len(processed_urls) < len(urls):
         custom_print(f"Failed to load URL {url} after multiple attempts. Skipping.", "error")
         continue
         
-    # Wait for initial content to load
+    # Ultra-minimal wait for initial ad content to load
     custom_print("Waiting for initial ad content to load...")
-    time.sleep(2)  # Initial wait
+    time.sleep(0.2)  # Ultra-reduced initial wait
+    
+    # Extract the ad count (like "~5 results") from the page immediately after loading
+    custom_print("Extracting ad count from the page...")
+    ad_count = None
+    ad_count_text = ""
+    
+    try:
+        # First try to find the element with role="heading" containing "results" with shorter timeout
+        try:
+            ad_count_element = WebDriverWait(driver, 3).until(
+                EC.presence_of_element_located((By.XPATH, "//div[@role='heading'][contains(text(), 'results') or contains(text(), 'result')]"))
+            )
+        except TimeoutException:
+            # Fall back to direct find without waiting
+            ad_count_element = driver.find_element(By.XPATH, "//div[@role='heading'][contains(text(), 'results') or contains(text(), 'result')]")
+        ad_count_text = ad_count_element.text.strip()
+        custom_print(f"Found ad count text: {ad_count_text}")
+        
+        # Extract the numeric part using regex
+        matches = re.search(r'~?(\d+(?:,\d+)?)', ad_count_text)
+        if matches:
+            # Remove commas and convert to int
+            ad_count = int(matches.group(1).replace(',', ''))
+            custom_print(f"Extracted ad count: {ad_count}")
+        else:
+            custom_print(f"Could not extract numeric ad count from: {ad_count_text}", "warning")
+    except (NoSuchElementException, TimeoutException):
+        # If the first method fails, try a more general approach
+        try:
+            ad_count_element = driver.find_element(By.XPATH, "//div[contains(text(), 'results') or contains(text(), 'result')]") 
+            ad_count_text = ad_count_element.text.strip()
+            custom_print(f"Found ad count text (alternate method): {ad_count_text}")
+            
+            # Extract the numeric part using regex
+            matches = re.search(r'~?(\d+(?:,\d+)?)', ad_count_text)
+            if matches:
+                # Remove commas and convert to int
+                ad_count = int(matches.group(1).replace(',', ''))
+                custom_print(f"Extracted ad count: {ad_count}")
+            else:
+                custom_print(f"Could not extract numeric ad count from: {ad_count_text}", "warning")
+        except NoSuchElementException:
+            # Try JavaScript as a last resort
+            try:
+                ad_count_text = driver.execute_script("""
+                    const elements = document.querySelectorAll('div');
+                    for (const el of elements) {
+                        const text = el.textContent.trim();
+                        if (text.includes('results') || text.includes('result')) {
+                            return text;
+                        }
+                    }
+                    return null;
+                """)
+                
+                if ad_count_text:
+                    custom_print(f"Found ad count text (JavaScript method): {ad_count_text}")
+                    matches = re.search(r'~?(\d+(?:,\d+)?)', ad_count_text)
+                    if matches:
+                        ad_count = int(matches.group(1).replace(',', ''))
+                        custom_print(f"JavaScript-extracted ad count: {ad_count}")
+            except Exception as js_error:
+                custom_print(f"JavaScript ad count extraction failed: {str(js_error)}", "warning")
+    except Exception as e:
+        custom_print(f"Error extracting ad count: {e}", "error")
+    
+    # Process URL parameters to get the page_id for tracking in the Milk sheet
+    url_params = {}
+    try:
+        # Extract page_id from URL
+        if "view_all_page_id=" in url:
+            page_id_match = re.search(r'view_all_page_id=(\d+)', url)
+            if page_id_match:
+                url_params['page_id'] = page_id_match.group(1)
+                custom_print(f"Extracted page_id from URL: {url_params['page_id']}")
+    except Exception as e:
+        custom_print(f"Error extracting URL parameters: {e}", "error")
+    
+    # If ad_count is 0, update the Milk sheet and skip to the next URL without scrolling
+    if ad_count == 0 or ad_count is None:
+        custom_print("No ads found (count is 0). Updating Milk sheet and skipping to next URL...")
+        
+        # Update the Milk worksheet with the ad count, timestamp, and IP address
+        if milk_worksheet:
+            try:
+                # Get the current headers to find column indices
+                milk_headers = milk_worksheet.row_values(1)
+                milk_column_indices = {}
+                
+                # Find the necessary column indices - account for trailing spaces in column names
+                for i, header in enumerate(milk_headers):
+                    # Check for 'no.of ads By Ai' column (exact match with spaces)
+                    if header == "no.of ads By Ai":
+                        milk_column_indices['ads_by_ai'] = i + 1  # 1-indexed
+                        custom_print(f"Found 'no.of ads By Ai' column at index {milk_column_indices['ads_by_ai']}")
+                    
+                    # Check for Last Update Time column
+                    if header == "Last Update Time" or header.lower().strip() == "last update time":
+                        milk_column_indices['last_update'] = i + 1  # 1-indexed
+                        custom_print(f"Found 'Last Update Time' column at index {milk_column_indices['last_update']}")
+                    
+                    # Check for IP Address column
+                    if header == "IP Address" or header.lower().strip() == "ip address":
+                        milk_column_indices['ip_address'] = i + 1  # 1-indexed
+                        custom_print(f"Found 'IP Address' column at index {milk_column_indices['ip_address']}")
+                    
+                    # Find Page Transperancy column for matching - handle spaces in column name
+                    if header == "Page Transperancy " or header == "Page Transperancy":
+                        milk_column_indices['page_transperancy'] = i + 1  # 1-indexed
+                        custom_print(f"Found 'Page Transperancy' column at index {milk_column_indices['page_transperancy']}")
+                    elif header.lower().strip() in ["page transperancy", "page transparency"]:
+                        milk_column_indices['page_transperancy'] = i + 1  # 1-indexed
+                        custom_print(f"Found 'Page Transperancy' column via fallback at index {milk_column_indices['page_transperancy']}")
+                
+                # Add any missing columns to Milk worksheet
+                if 'ads_by_ai' not in milk_column_indices:
+                    next_col = len(milk_headers) + 1
+                    milk_worksheet.update_cell(1, next_col, "no.of ads By Ai")
+                    milk_column_indices['ads_by_ai'] = next_col
+                    custom_print(f"Added 'no.of ads By Ai' column at index {next_col}")
+                
+                if 'last_update' not in milk_column_indices:
+                    next_col = len(milk_headers) + 1
+                    milk_worksheet.update_cell(1, next_col, "Last Update Time")
+                    milk_column_indices['last_update'] = next_col
+                    custom_print(f"Added 'Last Update Time' column at index {next_col}")
+                
+                if 'ip_address' not in milk_column_indices:
+                    next_col = len(milk_headers) + 1
+                    milk_worksheet.update_cell(1, next_col, "IP Address")
+                    milk_column_indices['ip_address'] = next_col
+                    custom_print(f"Added 'IP Address' column at index {next_col}")
+                
+                # Find the matching row in Milk worksheet for this URL's page_id
+                row_index = None
+                
+                if 'page_transperancy' in milk_column_indices and 'page_id' in url_params:
+                    # Get all values in the Page Transperancy column
+                    page_trans_values = milk_worksheet.col_values(milk_column_indices['page_transperancy'])
+                    
+                    # Look for a row that contains this page_id
+                    for i, cell_value in enumerate(page_trans_values):
+                        if url_params['page_id'] in cell_value:
+                            row_index = i + 1  # 1-indexed
+                            custom_print(f"Found matching page_id in Milk worksheet at row {row_index}")
+                            break
+                
+                if row_index:
+                    # Get current timestamp
+                    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    
+                    # Update the no.of ads By Ai column - extract only the number
+                    if 'ads_by_ai' in milk_column_indices:
+                        # If ad_count is found, use it, otherwise use 0
+                        value_to_update = str(ad_count) if ad_count is not None else '0'
+                        milk_worksheet.update_cell(row_index, milk_column_indices['ads_by_ai'], value_to_update)
+                        custom_print(f"Updated 'no.of ads By Ai' column with value: {value_to_update}")
+                    
+                    # Update the Last Update Time column
+                    if 'last_update' in milk_column_indices:
+                        milk_worksheet.update_cell(row_index, milk_column_indices['last_update'], current_time)
+                        custom_print(f"Updated 'Last Update Time' column with value: {current_time}")
+                    
+                    # Update the IP Address column
+                    if 'ip_address' in milk_column_indices:
+                        milk_worksheet.update_cell(row_index, milk_column_indices['ip_address'], current_ip)
+                        custom_print(f"Updated 'IP Address' column with value: {current_ip}")
+                    
+                    # Update the same columns in the Ads Details worksheet if needed
+                    if ads_details_worksheet:
+                        try:
+                            # Get the headers from Ads Details worksheet
+                            ads_headers = ads_details_worksheet.row_values(1)
+                            ads_column_indices = {}
+                            
+                            # Find the necessary column indices
+                            for i, header in enumerate(ads_headers):
+                                # Check for Last Update Time column
+                                if header == "Last Update Time" or header.lower().strip() == "last update time":
+                                    ads_column_indices['last_update'] = i + 1  # 1-indexed
+                                    custom_print(f"Found 'Last Update Time' column in Ads Details at index {ads_column_indices['last_update']}")
+                                
+                                # Check for IP Address column
+                                if header == "IP Address" or header.lower().strip() == "ip address":
+                                    ads_column_indices['ip_address'] = i + 1  # 1-indexed
+                                    custom_print(f"Found 'IP Address' column in Ads Details at index {ads_column_indices['ip_address']}")
+                            
+                            # Find all rows in Ads Details worksheet that match this page_id
+                            if 'page_id' in url_params:
+                                # Update all matching rows in Ads Details worksheet
+                                try:
+                                    # Find column with Page ID or similar in Ads Details
+                                    page_id_col_index = None
+                                    for i, header in enumerate(ads_headers):
+                                        if "page id" in header.lower() or "pageid" in header.lower().replace(" ", ""):
+                                            page_id_col_index = i + 1  # 1-indexed
+                                            custom_print(f"Found Page ID column in Ads Details at index {page_id_col_index}")
+                                            break
+                                    
+                                    if page_id_col_index:
+                                        # Get all Page ID values
+                                        page_id_values = ads_details_worksheet.col_values(page_id_col_index)
+                                        
+                                        # Find rows with matching page_id
+                                        matching_rows = []
+                                        for i, cell_value in enumerate(page_id_values):
+                                            if str(url_params['page_id']) in str(cell_value):
+                                                matching_rows.append(i + 1)  # 1-indexed
+                                        
+                                        custom_print(f"Found {len(matching_rows)} matching rows in Ads Details worksheet")
+                                        
+                                        # Update Last Update Time and IP Address for all matching rows
+                                        for row_idx in matching_rows:
+                                            if 'last_update' in ads_column_indices:
+                                                ads_details_worksheet.update_cell(row_idx, ads_column_indices['last_update'], current_time)
+                                            
+                                            if 'ip_address' in ads_column_indices:
+                                                ads_details_worksheet.update_cell(row_idx, ads_column_indices['ip_address'], current_ip)
+                                    
+                                except Exception as e:
+                                    custom_print(f"Error updating Ads Details worksheet for zero ads case: {e}", "error")
+                        except Exception as e:
+                            custom_print(f"Error working with Ads Details worksheet for zero ads case: {e}", "error")
+                else:
+                    custom_print(f"Could not find matching row in Milk worksheet for page_id: {url_params.get('page_id', 'unknown')}", "warning")
+            except Exception as e:
+                custom_print(f"Error updating Milk worksheet for zero ads case: {e}", "error")
+        
+        # Add this URL to processed_urls and continue to the next URL
+        processed_urls.add(url)
+        continue
     
     # Define variable for storing ad data from this URL
     ads_data = {}
     
-    # Start scrolling to load content with human-like behavior
-    custom_print("Starting human-like scrolling to load content...")
+    # Start scrolling to load content with human-like behavior since ads were found
+    custom_print(f"Found {ad_count} ads. Starting human-like scrolling to load content...")
     
     # Initialize vars needed for our special end-of-results detection
     element_found = False
     
-    # Simulate initial random mouse movements before scrolling
-    custom_print("Performing initial random mouse movements...")
-    simulate_random_mouse_movements(driver, num_movements=random.randint(3, 7))
+    # Only occasionally simulate minimal mouse movements before scrolling
+    if random.random() < 0.15:  # 15% chance to perform any movements
+        custom_print("Performing minimal random mouse movements...")
+        simulate_random_mouse_movements(driver, num_movements=random.randint(1, 3))
+    else:
+        custom_print("Skipping initial mouse movements to save time...")
     
-    # Add a random delay before starting to scroll (appears more human-like)
-    delay = add_random_delays(1.0, 3.0)
+    # Add a minimal random delay before starting to scroll
+    delay = add_random_delays(0.2, 0.6)
     custom_print(f"Waiting {delay:.2f} seconds before starting to scroll...")
     
-    # Perform human-like scrolling using our anti-detection utility
+    # Perform ultra-fast scrolling with minimal pauses
     scroll_count = perform_human_like_scroll(
         driver, 
-        scroll_pause_base=random.uniform(0.8, 1.5),  # Random base pause time
-        max_scroll_attempts=random.randint(3, 5)     # Random number of attempts at bottom
+        scroll_pause_base=random.uniform(0.1, 0.5),  # Ultra-short pause time
+        max_scroll_attempts=4                       # Minimal attempts at bottom
     )
     
     custom_print(f"Completed {scroll_count} human-like scrolls")
@@ -537,16 +772,15 @@ while len(processed_urls) < len(urls):
     if scroll_count > 500: # Adjust limit as needed
         custom_print("⚠️ Reached maximum scroll limit (500). Stopping scroll.")
     
-    # Extract the ad count (like "~5 results") from the page
-    custom_print("Extracting ad count from the page...")
-    ad_count = None
-    ad_count_text = ""
-    
     try:
-        # First try to find the element with role="heading" containing "results"
-        ad_count_element = wait.until(
-            EC.presence_of_element_located((By.XPATH, "//div[@role='heading'][contains(text(), 'results') or contains(text(), 'result')]"))
-        )
+        # First try to find the element with role="heading" containing "results" with shorter timeout
+        try:
+            ad_count_element = WebDriverWait(driver, 3).until(
+                EC.presence_of_element_located((By.XPATH, "//div[@role='heading'][contains(text(), 'results') or contains(text(), 'result')]"))
+            )
+        except TimeoutException:
+            # Fall back to direct find without waiting
+            ad_count_element = driver.find_element(By.XPATH, "//div[@role='heading'][contains(text(), 'results') or contains(text(), 'result')]")
         ad_count_text = ad_count_element.text.strip()
         custom_print(f"Found ad count text: {ad_count_text}")
         
@@ -680,10 +914,11 @@ while len(processed_urls) < len(urls):
                 current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 
                 # Update the no.of ads By Ai column - extract only the number
-                if 'ads_by_ai' in milk_column_indices and ad_count:
-                    # Just use the numeric value
-                    milk_worksheet.update_cell(row_index, milk_column_indices['ads_by_ai'], str(ad_count))
-                    custom_print(f"Updated 'no.of ads By Ai' column with value: {ad_count}")
+                if 'ads_by_ai' in milk_column_indices:
+                    # If ad_count is found, use it, otherwise use 0
+                    value_to_update = str(ad_count) if ad_count is not None else '0'
+                    milk_worksheet.update_cell(row_index, milk_column_indices['ads_by_ai'], value_to_update)
+                    custom_print(f"Updated 'no.of ads By Ai' column with value: {value_to_update}")
                 
                 # Update the Last Update Time column
                 if 'last_update' in milk_column_indices:
@@ -735,18 +970,18 @@ while len(processed_urls) < len(urls):
 
     # --- Enhanced processing with human-like behavior ---
     custom_print("Adding random delay before processing ads to prevent detection...")
-    add_random_delays(1.5, 3.5)  # Random delay before processing
+    add_random_delays(1.0, 2.0)  # Reduced delay
     
     for i, div in enumerate(divs_2, 1):
         # Randomize processing pattern (sometimes add delay between ads to look more human)
-        if random.random() < 0.3:  # 30% chance
-            delay = random.uniform(0.5, 2.0)
-            custom_print(f"Taking a short {delay:.1f}s break to appear more human-like...")
+        if random.random() < 0.1:  # 10% chance
+            delay = random.uniform(0.2, 0.5)  # Reduced delay
+            custom_print(f"Taking a very short {delay:.1f}s break to maintain minimal human-like behavior...")
             time.sleep(delay)
             
-            # Sometimes perform random mouse movements
-            if random.random() < 0.5:  # 50% chance during those breaks
-                simulate_random_mouse_movements(driver, num_movements=random.randint(1, 3))
+            # Occasionally perform minimal mouse movements
+            if random.random() < 0.2:  # 20% chance
+                simulate_random_mouse_movements(driver, num_movements=1)  # Reduced movements
         
         try:
             # Detect potential anti-scraping challenges
