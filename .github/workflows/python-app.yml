@@ -1,14 +1,14 @@
-name: gems
+name: Facebook Ads Scraper
 
 on:
   schedule:
-    - cron: '30 13 * * *'  # Runs every day at 12:30 PM UTC (7 PM IST)
+    - cron: '30 10 * * *'  # Run daily at 10:30 AM UTC (4:00 PM Indian time - UTC+5:30)
   workflow_dispatch:     # Allow manual triggering
 
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 360  # Set appropriate timeout
+    timeout-minutes: 120  # Set appropriate timeout
     
     steps:
       - name: Checkout code
@@ -111,6 +111,13 @@ jobs:
           print(f'Saved {len(proxies)} unique proxies to proxies.txt')
           "
       
+      - name: Install ffmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          # Verify installation
+          ffmpeg -version
+          
       - name: Run master script
         run: python transcript_bot.py
       
