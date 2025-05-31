@@ -4,6 +4,7 @@ import time
 import logging
 import subprocess
 import platform
+import os
 from datetime import datetime
 
 # Set up logging - only for errors
@@ -23,6 +24,13 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
+
+def print_master_progress(current, total, script_name):
+    """Print a progress bar for the master script execution."""
+    progress_percentage = (current / total) * 100
+    progress_bar = f"[{'=' * int(progress_percentage / 2)}{' ' * (50 - int(progress_percentage / 2))}] {progress_percentage:.1f}%"
+    print(f"\n::group::MASTER SCRIPT PROGRESS\n{progress_bar}\nRunning script {current}/{total}: {script_name}\n::endgroup::")
+    sys.stdout.flush()
 
 def run_script(script_name, description):
     """Run a Python script and capture its output and errors."""
@@ -81,6 +89,10 @@ def run_script(script_name, description):
             # Prepare environment variables for the subprocess
             env = os.environ.copy()
             
+            # Set a flag to indicate this is running from the master script
+            # This allows the child scripts to detect they're being run from master_script
+            env['RUNNING_FROM_MASTER_SCRIPT'] = 'true'
+            
             # Run as subprocess
             process = subprocess.Popen(
                 [sys.executable, script_name],
@@ -98,7 +110,13 @@ def run_script(script_name, description):
                 for line in iter(stream.readline, ''):
                     if not line:
                         break
-                    logger.info(f"{prefix}: {line.strip()}")
+                    # Pass through progress updates from child scripts directly to stdout
+                    # for proper GitHub Actions display
+                    if '::group::PROGRESS UPDATE' in line:
+                        print(line.strip())
+                        sys.stdout.flush()
+                    else:
+                        logger.info(f"{prefix}: {line.strip()}")
             
             # Start threads to handle stdout and stderr
             stdout_thread = threading.Thread(target=log_output, args=(process.stdout, script_name))
@@ -152,6 +170,9 @@ def main():
     all_success = True
     for i, script in enumerate(scripts, 1):
         logger.info(f"Running script {i}/{len(scripts)}: {script['name']}")
+        
+        # Show progress in GitHub Actions console
+        print_master_progress(i, len(scripts), script['name'])
         
         # Add a delay between scripts
         if i > 1:
