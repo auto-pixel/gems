@@ -352,6 +352,27 @@ urls_to_process = urls.copy()  # Keep original list intact
 processed_urls = set()  # Track which URLs have been processed
 custom_print(f"Will process {len(urls_to_process)} URLs in randomized order")
 
+# Initialize progress tracking
+total_urls = len(urls)
+def update_progress_percentage():
+    if total_urls > 0:
+        progress_percentage = (len(processed_urls) / total_urls) * 100
+        # Format with GitHub Actions-friendly output that's easy to spot in logs
+        progress_bar = f"[{'=' * int(progress_percentage / 2)}{' ' * (50 - int(progress_percentage / 2))}] {progress_percentage:.1f}%"
+        
+        # Check if running from master script to use the appropriate format
+        running_from_master = os.environ.get('RUNNING_FROM_MASTER_SCRIPT') == 'true'
+        
+        if running_from_master:
+            # When running from master script, use GitHub Actions group format
+            print(f"\n::group::PROGRESS UPDATE [Ad_details_scraper]\n{progress_bar}\nProcessed: {len(processed_urls)}/{total_urls} URLs\n::endgroup::")
+        else:
+            # When running standalone, use a simpler format that's still clear
+            print(f"\nPROGRESS [Ad_details_scraper]: {progress_percentage:.1f}% ({len(processed_urls)}/{total_urls} URLs)\n{progress_bar}")
+            
+        # This ensures the progress is visible in GitHub Actions logs
+        sys.stdout.flush()
+
 # Process each URL from the Milk worksheet one at a time and update the sheet after each
 # Continue until all URLs have been processed
 url_index = 0
@@ -363,6 +384,9 @@ while len(processed_urls) < len(urls):
     
     custom_print(f"\n===== Processing URL {url_index}/{len(urls)} ({len(processed_urls)+1} of {len(urls)} total) =====")
     custom_print(f"Opening URL: {url}")
+    
+    # Update progress percentage for GitHub Actions console
+    update_progress_percentage()
     
     # Implement session cooling - add random delays between processing URLs
     if url_index > 1:
@@ -712,6 +736,8 @@ while len(processed_urls) < len(urls):
         
         # Add this URL to processed_urls and continue to the next URL
         processed_urls.add(url)
+        # Update progress after adding to processed_urls
+        update_progress_percentage()
         continue
     
     # Define variable for storing ad data from this URL
