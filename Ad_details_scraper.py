@@ -358,14 +358,16 @@ def update_progress_percentage():
     if total_urls > 0:
         progress_percentage = (len(processed_urls) / total_urls) * 100
         # Format with GitHub Actions-friendly output that's easy to spot in logs
-        progress_bar = f"[{'=' * int(progress_percentage / 2)}{' ' * (50 - int(progress_percentage / 2))}] {progress_percentage:.1f}%"
+        # Use simple ASCII characters for progress bar to avoid encoding issues
+        progress_bar = f"[{'#' * int(progress_percentage / 2)}{'-' * (50 - int(progress_percentage / 2))}] {progress_percentage:.1f}%"
         
         # Check if running from master script to use the appropriate format
         running_from_master = os.environ.get('RUNNING_FROM_MASTER_SCRIPT') == 'true'
         
         if running_from_master:
-            # When running from master script, use GitHub Actions group format
-            print(f"\n::group::PROGRESS UPDATE [Ad_details_scraper]\n{progress_bar}\nProcessed: {len(processed_urls)}/{total_urls} URLs\n::endgroup::")
+            # When running from master script, simplified output for central display
+            print(f"PROGRESS [Ad_details_scraper]: {progress_bar} ({len(processed_urls)}/{total_urls} URLs)")
+            sys.stdout.flush()
         else:
             # When running standalone, use a simpler format that's still clear
             print(f"\nPROGRESS [Ad_details_scraper]: {progress_percentage:.1f}% ({len(processed_urls)}/{total_urls} URLs)\n{progress_bar}")
@@ -376,17 +378,160 @@ def update_progress_percentage():
 # Process each URL from the Milk worksheet one at a time and update the sheet after each
 # Continue until all URLs have been processed
 url_index = 0
+
+# First, check which URLs have already been processed in the milk sheet recently
+previously_processed_urls = set()
+reprocessing_needed = []  # URLs that need to be reprocessed (processed > 24 hours ago)
+
+# Get current date (without time) for comparing last update time
+current_date = datetime.now()
+current_date_only = current_date.date()
+custom_print(f"Current date: {current_date_only}")
+
+if milk_worksheet:
+    try:
+        # Get the current headers to find column indices
+        milk_headers = milk_worksheet.row_values(1)
+        milk_column_indices = {}
+        
+        for i, header in enumerate(milk_headers):
+            milk_column_indices[header.lower().strip()] = i + 1  # Convert to 1-indexed
+        
+        # Find the Last Update Time and URL columns
+        last_update_col = None
+        url_col = None
+        page_id_col = None
+        
+        for header, idx in milk_column_indices.items():
+            if header in ['last update time']:
+                last_update_col = idx
+            elif header in ['ad url', 'url', 'ad library url']:
+                url_col = idx
+            elif header in ['page transperancy', 'page transparency']:
+                page_id_col = idx
+        
+        if last_update_col and url_col:
+            # Get all rows from milk sheet
+            all_rows = milk_worksheet.get_all_values()
+            
+            custom_print(f"Checking {len(all_rows)-1} rows in milk sheet for previously processed URLs")
+            
+            # Skip header row
+            for row_idx, row in enumerate(all_rows[1:], 2):  # Start from row 2 (1-indexed)
+                # Check if URL has a Last Update Time (meaning it was processed)
+                if url_col-1 < len(row) and last_update_col-1 < len(row):
+                    url_value = row[url_col-1].strip() if row[url_col-1] else ""
+                    last_update_value = row[last_update_col-1].strip() if last_update_col-1 < len(row) else ""
+                    
+                    # Check if this is a valid URL to process
+                    if url_value:
+                        # Parse the page_id from the URL for better matching
+                        url_params = parse_url_params(url_value)
+                        page_id = url_params.get('page_id') or url_params.get('view_all_page_id')
+                        
+                        if last_update_value:
+                            try:
+                                # Parse the last update timestamp
+                                last_update_date = datetime.strptime(last_update_value, "%Y-%m-%d %H:%M:%S")
+                                
+                                # Extract just the date part (without time)
+                                last_update_date_only = last_update_date.date()
+                                
+                                # Compare only dates, not times
+                                if last_update_date_only == current_date_only:
+                                    # URL was processed today, skip it
+                                    previously_processed_urls.add(url_value)
+                                    custom_print(f"URL already processed today ({last_update_date_only}): {url_value}")
+                                else:
+                                    # URL was not processed today, needs reprocessing
+                                    custom_print(f"URL needs reprocessing (last updated on {last_update_date_only}, current date is {current_date_only}): {url_value}")
+                                    reprocessing_needed.append((url_value, row_idx, page_id))
+                            except Exception as e:
+                                custom_print(f"Error parsing last update time '{last_update_value}': {e}", "warning")
+                                # If we can't parse the timestamp, treat as needing reprocessing
+                                reprocessing_needed.append((url_value, row_idx, page_id))
+                        else:
+                            # No last update time, it needs processing
+                            custom_print(f"URL never processed: {url_value}")
+                            reprocessing_needed.append((url_value, row_idx, page_id))
+                    elif page_id_col and page_id_col-1 < len(row) and row[page_id_col-1].strip():
+                        # If URL is empty but page_id exists, this row needs a URL
+                        custom_print(f"Row {row_idx} has page_id but no URL, it may need attention")
+    except Exception as e:
+        custom_print(f"Error checking previously processed URLs: {e}", "error")
+
+custom_print(f"Found {len(previously_processed_urls)} URLs already processed today that will be skipped")
+custom_print(f"Found {len(reprocessing_needed)} URLs that need to be processed (not updated today)")
+
+# Create a comprehensive list of all URLs to process
+urls_to_process = []
+
+# First add URLs that need reprocessing (processed > 24 hours ago or never processed)
+for url_info in reprocessing_needed:
+    url = url_info[0]  # Extract just the URL from the tuple
+    if url not in urls_to_process:
+        urls_to_process.append(url)
+
+# Then add any URLs from the original list that aren't in either category yet
+for url in urls:
+    if url not in previously_processed_urls and url not in urls_to_process:
+        urls_to_process.append(url)
+        custom_print(f"Added new URL to processing list: {url}")
+
+custom_print(f"Will process {len(urls_to_process)} URLs total (skipping {len(previously_processed_urls)} URLs already processed today)")
+
+# If no URLs to process, exit gracefully
+if not urls_to_process:
+    custom_print("All URLs have already been processed today. Nothing new to process.")
+    # Clean up and exit
+    driver.quit()
+    sys.exit(0)
+
+# Reset total URLs to the final list we need to process
+total_urls = len(urls_to_process)
+urls = urls_to_process
+
+# Create a mapping of URLs to their milk sheet row numbers from our earlier processing
+# This will help us update the correct row later
+url_to_row_mapping = {}
+for url_info in reprocessing_needed:
+    url, row_idx, page_id = url_info
+    url_to_row_mapping[url] = row_idx
+
 while len(processed_urls) < len(urls):
     # Randomly select a URL that hasn't been processed yet
     remaining_urls = [u for u in urls if u not in processed_urls]
     url = random.choice(remaining_urls)
     url_index += 1
     
+    # Track the milk sheet row for this URL if we know it
+    current_milk_row = url_to_row_mapping.get(url, None)
+    if current_milk_row:
+        custom_print(f"This URL corresponds to row {current_milk_row} in the milk sheet")
+    
     custom_print(f"\n===== Processing URL {url_index}/{len(urls)} ({len(processed_urls)+1} of {len(urls)} total) =====")
     custom_print(f"Opening URL: {url}")
     
     # Update progress percentage for GitHub Actions console
-    update_progress_percentage()
+    if total_urls > 0:
+        progress_percentage = (len(processed_urls) / total_urls) * 100
+        # Format with GitHub Actions-friendly output that's easy to spot in logs
+        # Use simple ASCII characters for progress bar to avoid encoding issues
+        progress_bar = f"[{'#' * int(progress_percentage / 2)}{'-' * (50 - int(progress_percentage / 2))}] {progress_percentage:.1f}%"
+        
+        # Check if running from master script to use the appropriate format
+        running_from_master = os.environ.get('RUNNING_FROM_MASTER_SCRIPT') == 'true'
+        
+        if running_from_master:
+            # When running from master script, simplified output for central display
+            print(f"PROGRESS [Ad_details_scraper]: {progress_bar} ({len(processed_urls)}/{total_urls} URLs)")
+            sys.stdout.flush()
+        else:
+            # When running standalone, use a simpler format that's still clear
+            print(f"\nPROGRESS [Ad_details_scraper]: {progress_percentage:.1f}% ({len(processed_urls)}/{total_urls} URLs)\n{progress_bar}")
+            
+        # This ensures the progress is visible in GitHub Actions logs
+        sys.stdout.flush()
     
     # Implement session cooling - add random delays between processing URLs
     if url_index > 1:
@@ -584,6 +729,9 @@ while len(processed_urls) < len(urls):
     except Exception as e:
         custom_print(f"Error extracting URL parameters: {e}", "error")
     
+    # Initialize should_skip_url flag
+    should_skip_url = False
+    
     # If ad_count is 0, update the Milk sheet and skip to the next URL without scrolling
     if ad_count == 0 or ad_count is None:
         custom_print("No ads found (count is 0). Updating Milk sheet and skipping to next URL...")
@@ -619,6 +767,36 @@ while len(processed_urls) < len(urls):
                     elif header.lower().strip() in ["page transperancy", "page transparency"]:
                         milk_column_indices['page_transperancy'] = i + 1  # 1-indexed
                         custom_print(f"Found 'Page Transperancy' column via fallback at index {milk_column_indices['page_transperancy']}")
+                    
+                # Also find URL column to check for existing URLs
+                url_col_index = None
+                for i, header in enumerate(milk_headers):
+                    if header.lower().strip() in ["ad url", "url", "ad library url"]:
+                        url_col_index = i + 1  # 1-indexed
+                        custom_print(f"Found URL column at index {url_col_index}")
+                        break
+                
+                # Check if this URL has already been processed (has Last Update Time)
+                if url_col_index and 'last_update' in milk_column_indices:
+                    # Get all URLs
+                    url_values = milk_worksheet.col_values(url_col_index)
+                    
+                    # Get all Last Update Time values
+                    last_update_values = milk_worksheet.col_values(milk_column_indices['last_update'])
+                    
+                    # Look for a row that contains this exact URL and has a Last Update Time
+                    for i, cell_url in enumerate(url_values):
+                        if i > 0 and i < len(last_update_values) and cell_url.strip() == url.strip():
+                            if last_update_values[i].strip():
+                                custom_print(f"This URL was already processed on {last_update_values[i]}")
+                                custom_print("Skipping this URL as it has already been processed...")
+                                
+                                # Flag that this URL should be skipped
+                                should_skip_url = True
+                                # Add to processed URLs for progress tracking
+                                processed_urls.add(url)
+                                update_progress_percentage()
+                                break
                 
                 # Add any missing columns to Milk worksheet
                 if 'ads_by_ai' not in milk_column_indices:
@@ -639,19 +817,49 @@ while len(processed_urls) < len(urls):
                     milk_column_indices['ip_address'] = next_col
                     custom_print(f"Added 'IP Address' column at index {next_col}")
                 
-                # Find the matching row in Milk worksheet for this URL's page_id
+                # Find the matching row in Milk worksheet for this URL
                 row_index = None
                 
-                if 'page_transperancy' in milk_column_indices and 'page_id' in url_params:
-                    # Get all values in the Page Transperancy column
-                    page_trans_values = milk_worksheet.col_values(milk_column_indices['page_transperancy'])
-                    
-                    # Look for a row that contains this page_id
-                    for i, cell_value in enumerate(page_trans_values):
-                        if url_params['page_id'] in cell_value:
-                            row_index = i + 1  # 1-indexed
-                            custom_print(f"Found matching page_id in Milk worksheet at row {row_index}")
+                # First, check if we already know which row this URL corresponds to
+                if current_milk_row:
+                    row_index = current_milk_row
+                    custom_print(f"Using known row {row_index} for this URL from earlier processing")
+                else:
+                    # Try to find URL column and match directly by URL
+                    url_col_index = None
+                    for i, header in enumerate(milk_headers):
+                        if header.lower().strip() in ["ad url", "url", "ad library url"]:
+                            url_col_index = i + 1  # 1-indexed
+                            custom_print(f"Found URL column at index {url_col_index}")
                             break
+                    
+                    if url_col_index:
+                        # Get all values in the URL column
+                        url_values = milk_worksheet.col_values(url_col_index)
+                        
+                        # Look for a row that contains this exact URL
+                        for i, cell_url in enumerate(url_values):
+                            if cell_url.strip() == url.strip():
+                                row_index = i + 1  # 1-indexed
+                                custom_print(f"Found matching URL in Milk worksheet at row {row_index}")
+                                break
+                    
+                    # If no match by URL, try matching by page_id as a fallback
+                    if not row_index and 'page_transperancy' in milk_column_indices and 'page_id' in url_params:
+                        # Get all values in the Page Transperancy column
+                        page_trans_values = milk_worksheet.col_values(milk_column_indices['page_transperancy'])
+                        
+                        # Look for a row that contains this page_id
+                        for i, cell_value in enumerate(page_trans_values):
+                            if url_params['page_id'] in cell_value:
+                                row_index = i + 1  # 1-indexed
+                                custom_print(f"Found matching page_id in Milk worksheet at row {row_index}")
+                                
+                                # If we found it by page_id but not URL, update the URL column
+                                if url_col_index:
+                                    milk_worksheet.update_cell(row_index, url_col_index, url)
+                                    custom_print(f"Updated URL column at row {row_index} with current URL")
+                                break
                 
                 if row_index:
                     # Get current timestamp
@@ -739,6 +947,11 @@ while len(processed_urls) < len(urls):
         # Update progress after adding to processed_urls
         update_progress_percentage()
         continue
+        
+    # Check if this URL should be skipped (was already processed)
+    if should_skip_url:
+        custom_print(f"Skipping URL {url} as it was already processed")
+        continue
     
     # Define variable for storing ad data from this URL
     ads_data = {}
@@ -750,7 +963,7 @@ while len(processed_urls) < len(urls):
     element_found = False
     
     # Only occasionally simulate minimal mouse movements before scrolling
-    if random.random() < 0.15:  # 15% chance to perform any movements
+    if random.random() < 0.15:  # 15% chance of brief pause
         custom_print("Performing minimal random mouse movements...")
         simulate_random_mouse_movements(driver, num_movements=random.randint(1, 3))
     else:
@@ -1025,14 +1238,14 @@ while len(processed_urls) < len(urls):
                 # If proxy is available, try to switch
                 if proxy_manager:
                     custom_print("Attempting to switch proxies and retry...", "warning")
-                    # Mark current proxy as failed
-                    current_proxy = driver.execute_script("return window.navigator.proxy")
-                    if current_proxy:
-                        proxy_manager.mark_proxy_failed(current_proxy)
                     
                     # Close and restart driver with new proxy
                     driver.quit()
-                    driver = create_stealth_driver(use_proxy=True, proxy_manager=proxy_manager, headless=True)
+                    driver = create_stealth_driver(
+                        use_proxy=True,
+                        proxy_manager=proxy_manager,
+                        headless=True
+                    )
                     wait = WebDriverWait(driver, random.uniform(8, 12))
                     
                     # Try to reload current URL
@@ -1820,6 +2033,28 @@ while len(processed_urls) < len(urls):
             
     # Add this URL to the set of processed URLs
     processed_urls.add(url)
+    
+    # Update progress after completing a URL
+    if total_urls > 0:
+        progress_percentage = (len(processed_urls) / total_urls) * 100
+        # Format with GitHub Actions-friendly output that's easy to spot in logs
+        # Use simple ASCII characters for progress bar to avoid encoding issues
+        progress_bar = f"[{'#' * int(progress_percentage / 2)}{'-' * (50 - int(progress_percentage / 2))}] {progress_percentage:.1f}%"
+        
+        # Check if running from master script to use the appropriate format
+        running_from_master = os.environ.get('RUNNING_FROM_MASTER_SCRIPT') == 'true'
+        
+        if running_from_master:
+            # When running from master script, simplified output for central display
+            print(f"PROGRESS [Ad_details_scraper]: {progress_bar} ({len(processed_urls)}/{total_urls} URLs)")
+            sys.stdout.flush()
+        else:
+            # When running standalone, use a simpler format that's still clear
+            print(f"\nPROGRESS [Ad_details_scraper]: {progress_percentage:.1f}% ({len(processed_urls)}/{total_urls} URLs)\n{progress_bar}")
+            
+        # This ensures the progress is visible in GitHub Actions logs
+        sys.stdout.flush()
+        
     custom_print(f"Completed processing URL {url_index} ({len(processed_urls)} of {len(urls)} total)")
     custom_print("-------------------------------------------")
 
