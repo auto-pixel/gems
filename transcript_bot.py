@@ -103,7 +103,7 @@ TRANSCRIPT_HEADERS = [
 def ensure_transcript_headers(sheet):
     headers = sheet.row_values(1)
     if headers != TRANSCRIPT_HEADERS:
-        sheet.update('A1:G1', [TRANSCRIPT_HEADERS])
+        sheet.update('A1:H1', [TRANSCRIPT_HEADERS])  # Updated to include column H for IP Address
         log(f"Updated headers in '{TARGET_TAB}' tab.")
 
 # ============ VIDEO DOWNLOADER ====================
@@ -139,14 +139,16 @@ def update_progress_percentage(current, total):
     """Print a progress bar for the transcript bot execution."""
     if total > 0:
         progress_percentage = (current / total) * 100
-        progress_bar = f"[{'=' * int(progress_percentage / 2)}{' ' * (50 - int(progress_percentage / 2))}] {progress_percentage:.1f}%"
+        # Use simple ASCII characters for progress bar to avoid encoding issues
+        progress_bar = f"[{'#' * int(progress_percentage / 2)}{'-' * (50 - int(progress_percentage / 2))}] {progress_percentage:.1f}%"
         
         # Check if running from master script to use the appropriate format
         running_from_master = os.environ.get('RUNNING_FROM_MASTER_SCRIPT') == 'true'
         
         if running_from_master:
-            # When running from master script, use GitHub Actions group format
-            print(f"\n::group::PROGRESS UPDATE [transcript_bot]\n{progress_bar}\nProcessed: {current}/{total} videos\n::endgroup::")
+            # When running from master script, simplified output for central display
+            print(f"PROGRESS [transcript_bot]: {progress_bar} ({current}/{total} videos)")
+            sys.stdout.flush()
         else:
             # When running standalone, use a simpler format that's still clear
             print(f"\nPROGRESS [transcript_bot]: {progress_percentage:.1f}% ({current}/{total} videos)\n{progress_bar}")
