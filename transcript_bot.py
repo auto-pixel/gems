@@ -37,10 +37,16 @@ CREDENTIALS_PATH = "credentials.json"
 BATCH_SIZE = float('inf')  # Process all videos
 WHISPER_MODEL = "base"  # or "small", "medium", "large" as needed
 
-# Check if we're running in Cloud Shell
+# Check if we're running in Cloud Shell or GitHub Actions
 IS_CLOUD_SHELL = os.environ.get('CLOUD_SHELL') == 'true' or '/google/devshell/' in os.getcwd()
-if IS_CLOUD_SHELL:
-    FFMPEG_PATH = "/usr/bin"  # Default location in Linux/Cloud Shell
+IS_GITHUB_ACTIONS = os.environ.get('GITHUB_ACTIONS') == 'true'
+
+if IS_CLOUD_SHELL or IS_GITHUB_ACTIONS:
+    FFMPEG_PATH = "/usr/bin"  # Default location in Linux/Cloud Shell/GitHub Actions
+    # If running in GitHub Actions, we'll need to install ffmpeg
+    if IS_GITHUB_ACTIONS:
+        os.system("apt-get update && apt-get install -y ffmpeg")
+        log("Installed ffmpeg for GitHub Actions environment", "info")
 else:
     FFMPEG_PATH = r"C:\ffmpeg\bin"  # Windows path
 
@@ -109,16 +115,48 @@ def ensure_transcript_headers(sheet):
 # ============ VIDEO DOWNLOADER ====================
 def download_video(url, out_dir):
     try:
-        local_filename = os.path.join(out_dir, url.split("/")[-1].split("?")[0])
+        # Create a more sanitized filename from the URL to avoid any path issues
+        import re
+        # Extract filename and remove query parameters
+        filename = url.split("/")[-1].split("?")[0]
+        # Sanitize filename to remove any potential problematic characters
+        sanitized_filename = re.sub(r'[^a-zA-Z0-9._-]', '_', filename)
+        local_filename = os.path.join(out_dir, sanitized_filename)
+        
         log(f"Downloading video: {url}")
         
-        # Direct connection to download the video
-        with requests.get(url, stream=True, timeout=60) as r:
-            r.raise_for_status()
-            with open(local_filename, 'wb') as f:
-                for chunk in r.iter_content(chunk_size=8192):
-                    f.write(chunk)
-        return local_filename
+        # Try up to 3 times with increasing timeouts
+        max_attempts = 3
+        for attempt in range(1, max_attempts + 1):
+            try:
+                timeout = 60 * attempt  # Increase timeout with each attempt
+                log(f"Download attempt {attempt}/{max_attempts} with {timeout}s timeout")
+                
+                # Direct connection to download the video
+                with requests.get(url, stream=True, timeout=timeout) as r:
+                    r.raise_for_status()
+                    with open(local_filename, 'wb') as f:
+                        for chunk in r.iter_content(chunk_size=8192):
+                            f.write(chunk)
+                
+                # Verify the file was downloaded and is not empty
+                if os.path.exists(local_filename) and os.path.getsize(local_filename) > 0:
+                    log(f"Successfully downloaded {os.path.getsize(local_filename)} bytes to {local_filename}")
+                    return local_filename
+                else:
+                    log(f"Downloaded file is empty or missing", "warning")
+                    # Continue to next attempt
+            except requests.exceptions.Timeout:
+                log(f"Download timed out on attempt {attempt}", "warning")
+            except requests.exceptions.RequestException as e:
+                log(f"Download request failed on attempt {attempt}: {e}", "warning")
+                
+            # Wait before retrying
+            if attempt < max_attempts:
+                time.sleep(2 * attempt)  # Increasing backoff
+        
+        log(f"Failed to download video after {max_attempts} attempts", "error")
+        return None
     except Exception as e:
         log(f"Failed to download video: {url} | Error: {e}", "error")
         return None
@@ -126,8 +164,37 @@ def download_video(url, out_dir):
 # ============ WHISPER TRANSCRIBE ==================
 def transcribe_video(file_path, model=None):
     try:
+        # Check if ffmpeg is installed and in PATH
+        import subprocess
+        try:
+            subprocess.run(['ffmpeg', '-version'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+        except (subprocess.SubprocessError, FileNotFoundError):
+            log("ffmpeg not found in PATH. Attempting to install it...", "warning")
+            if os.environ.get('GITHUB_ACTIONS') == 'true':
+                # In GitHub Actions, we need sudo
+                os.system("sudo apt-get update && sudo apt-get install -y ffmpeg")
+                log("Installed ffmpeg using apt-get in GitHub Actions", "info")
+            else:
+                # For other Linux environments
+                os.system("apt-get update && apt-get install -y ffmpeg")
+                log("Installed ffmpeg using apt-get", "info")
+            
+            # Verify installation
+            try:
+                subprocess.run(['ffmpeg', '-version'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+                log("ffmpeg successfully installed and verified", "info")
+            except (subprocess.SubprocessError, FileNotFoundError):
+                log("Failed to install ffmpeg. Transcription may fail.", "error")
+        
+        # Load model if not provided
         if model is None:
             model = whisper.load_model(WHISPER_MODEL)
+        
+        # Check if file exists before transcription
+        if not os.path.exists(file_path):
+            log(f"File not found: {file_path}", "error")
+            return None
+            
         result = model.transcribe(file_path)
         return result["text"]
     except Exception as e:
@@ -249,12 +316,23 @@ def main():
         ads_count = row.get(COLUMNS["ads_count"])
         media_url = row.get(COLUMNS["media_url"])
         
-        # Only process videos if ads_count is greater than 99
+        # Handle ads_count more robustly
         try:
-            ads_count_int = int(str(ads_count).strip())
+            # Handle None, empty string, or invalid format
+            if ads_count is None or str(ads_count).strip() == '':
+                ads_count_int = 0  # Default to 0 for empty values
+                log(f"Empty ads_count for library_id={lib_id}, using default 0", "info")
+            else:
+                # Try to extract only digits from ads_count if it contains text
+                import re
+                digits_only = re.sub(r'[^0-9]', '', str(ads_count).strip())
+                if digits_only:
+                    ads_count_int = int(digits_only)
+                else:
+                    ads_count_int = 0
         except (ValueError, TypeError):
-            log(f"Invalid ads_count for library_id={lib_id}: {ads_count}", "warning")
-            continue
+            log(f"Invalid ads_count for library_id={lib_id}: {ads_count}, using default 0", "warning")
+            ads_count_int = 0  # Continue processing with default value instead of skipping
         
         if ads_count_int <= 10:
             log(f"Skipping video with ads_count={ads_count_int} for library_id={lib_id}", "info")
