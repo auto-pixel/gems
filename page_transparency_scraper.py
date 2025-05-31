@@ -22,9 +22,8 @@ from fb_antidetect_utils import (
     ProxyManager,
     create_stealth_driver,
     perform_human_like_scroll,
-    simulate_random_mouse_movements,
-    add_random_delays,
-    get_current_ip
+    simulate_random_mouse_movements
+
 )
 
 # Set up logging system
@@ -158,16 +157,24 @@ def extract_transparency_urls(worksheet):
         url_row_mapping = {}
         
         # Skip header row
+        # Use an ordered dictionary to maintain the exact order of URLs by row number
+        ordered_url_mapping = {}
         for row_idx, row in enumerate(all_values[1:], 2):  # Start at row 2 (1-indexed)
             # Only proceed if we have valid data in the transparency column
             if len(row) >= transparency_col_idx:
                 transparency_url = row[transparency_col_idx - 1].strip()  # Convert to 0-indexed
                 
                 if transparency_url and transparency_url.startswith("http"):
-                    urls.append(transparency_url)
+                    # Store with row_idx as key to maintain order
+                    ordered_url_mapping[row_idx] = transparency_url
                     url_row_mapping[transparency_url] = row_idx
         
-        custom_print(f"Extracted {len(urls)} Page Transparency URLs from worksheet")
+        # Extract URLs in strict row order
+        sorted_rows = sorted(ordered_url_mapping.keys())  # Sort row indices numerically
+        urls = [ordered_url_mapping[row] for row in sorted_rows]  # Get URLs in row order
+        
+        custom_print(f"Extracted {len(urls)} Page Transparency URLs from worksheet in exact sheet order")
+        custom_print(f"URLs will be processed strictly from row {sorted_rows[0]} to {sorted_rows[-1]}")
         return urls, url_row_mapping, page_col_idx, transparency_col_idx
         
     except Exception as e:
