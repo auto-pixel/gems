@@ -3,6 +3,7 @@ import sys
 import time
 import logging
 import json
+import os
 from datetime import datetime
 import gspread
 from google.oauth2.service_account import Credentials
@@ -259,6 +260,26 @@ For each element, be specific and actionable. Make reasonable inferences when ne
         log(f"Claude API error: {e}", "error")
         return None
 
+# ============ PROGRESS TRACKING =============
+def update_progress_percentage(current, total):
+    """Print a progress bar for the Claude AI script execution."""
+    if total > 0:
+        progress_percentage = (current / total) * 100
+        progress_bar = f"[{'=' * int(progress_percentage / 2)}{' ' * (50 - int(progress_percentage / 2))}] {progress_percentage:.1f}%"
+        
+        # Check if running from master script to use the appropriate format
+        running_from_master = os.environ.get('RUNNING_FROM_MASTER_SCRIPT') == 'true'
+        
+        if running_from_master:
+            # When running from master script, use GitHub Actions group format
+            print(f"\n::group::PROGRESS UPDATE [Claude_ai]\n{progress_bar}\nProcessed: {current}/{total} transcripts\n::endgroup::")
+        else:
+            # When running standalone, use a simpler format that's still clear
+            print(f"\nPROGRESS [Claude_ai]: {progress_percentage:.1f}% ({current}/{total} transcripts)\n{progress_bar}")
+            
+        # This ensures the progress is visible in GitHub Actions logs
+        sys.stdout.flush()
+
 # ============ MAIN LOGIC ======================
 def main():
     log("==== TRANSCRIPT ANALYZER START ====")
@@ -276,6 +297,11 @@ def main():
     # Get all data from the sheet
     all_data = sheet.get_all_records()
     log(f"Loaded {len(all_data)} rows from '{WORKSHEET_NAME}' worksheet")
+    
+    # Initialize progress tracking
+    processed_count = 0
+    total_count = len(all_data)
+    update_progress_percentage(processed_count, total_count)
     
     # Process each row with a transcript
     processed = 0
@@ -333,6 +359,10 @@ def main():
             
             log(f"Updated row {idx} with analysis")
             processed += 1
+            processed_count += 1
+            
+            # Update progress
+            update_progress_percentage(processed_count, total_count)
             
             # Add delay to avoid rate limiting
             time.sleep(1)
@@ -345,3 +375,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
