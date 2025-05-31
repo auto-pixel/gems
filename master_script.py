@@ -1,5 +1,6 @@
 import os
 import sys
+import re
 import time
 import logging
 import subprocess
@@ -25,12 +26,39 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-def print_master_progress(current, total, script_name):
-    """Print a progress bar for the master script execution."""
-    progress_percentage = (current / total) * 100
-    progress_bar = f"[{'=' * int(progress_percentage / 2)}{' ' * (50 - int(progress_percentage / 2))}] {progress_percentage:.1f}%"
-    print(f"\n::group::MASTER SCRIPT PROGRESS\n{progress_bar}\nRunning script {current}/{total}: {script_name}\n::endgroup::")
+# Dictionary to store the most recent progress update from each script
+script_progress = {}
+
+def print_all_progress():
+    """Print all progress information in a clean format"""
+    # Clear the screen first (Windows)
+    os.system('cls')
+    
+    # Print the header
+    print("===== FACEBOOK AD SCRAPER PROGRESS =====\n")
+    
+    # Print master script progress if available
+    if 'master' in script_progress:
+        print(script_progress['master'])
+    
+    # Print progress for all other scripts
+    for script_name, progress in script_progress.items():
+        if script_name != 'master':
+            print(progress)
+    
     sys.stdout.flush()
+
+def print_master_progress(current, total, script_name):
+    """Update progress bar for the master script execution."""
+    progress_percentage = (current / total) * 100
+    # Use simple ASCII characters for progress bar to avoid encoding issues
+    progress_bar = f"[{'#' * int(progress_percentage / 2)}{'-' * (50 - int(progress_percentage / 2))}] {progress_percentage:.1f}%"
+    
+    # Store the progress message
+    script_progress['master'] = f"MASTER SCRIPT: {progress_bar} (Running script {current}/{total}: {script_name})"
+    
+    # Print all progress information
+    print_all_progress()
 
 def run_script(script_name, description):
     """Run a Python script and capture its output and errors."""
@@ -98,8 +126,10 @@ def run_script(script_name, description):
                 [sys.executable, script_name],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                text=True,
+                universal_newlines=True,
                 bufsize=1,
+                encoding='utf-8', # Explicitly set encoding to UTF-8
+                errors='replace', # Replace invalid characters rather than crashing
                 env=env
             )
             
@@ -107,24 +137,36 @@ def run_script(script_name, description):
             import threading
             
             def log_output(stream, prefix):
-                for line in iter(stream.readline, ''):
-                    if not line:
-                        break
-                    # Pass through progress updates from child scripts directly to stdout
-                    # for proper GitHub Actions display
-                    if '::group::PROGRESS UPDATE' in line:
-                        print(line.strip())
-                        sys.stdout.flush()
-                    else:
-                        logger.info(f"{prefix}: {line.strip()}")
+                try:
+                    for line in iter(stream.readline, ''):
+                        if not line:
+                            break
+                        # Handle progress updates from child scripts
+                        if line.strip().startswith('PROGRESS ['):
+                            # Extract script name from progress line
+                            script_match = re.search(r'\[([^\]]+)\]', line)
+                            if script_match:
+                                script_key = script_match.group(1)
+                                # Store the progress line for this script
+                                script_progress[script_key] = line.strip()
+                                # Update the progress display
+                                print_all_progress()
+                        else:
+                            logger.info(f"{prefix}: {line.strip()}")
+                except Exception as e:
+                    logger.error(f"Error processing output stream from {prefix}: {str(e)}")
+                    # Try to continue despite error
             
-            # Start threads to handle stdout and stderr
+            # This ensures the progress is visible in GitHub Actions logs
             stdout_thread = threading.Thread(target=log_output, args=(process.stdout, script_name))
             stderr_thread = threading.Thread(target=log_output, args=(process.stderr, f"{script_name} stderr"))
             stdout_thread.daemon = True
             stderr_thread.daemon = True
             stdout_thread.start()
             stderr_thread.start()
+            
+            # Allow a moment for the progress display to initialize
+            time.sleep(1)
             
             # Wait for completion
             return_code = process.wait()
