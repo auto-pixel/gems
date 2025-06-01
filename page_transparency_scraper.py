@@ -252,7 +252,7 @@ if __name__ == "__main__":
             try:
                 # Looking for the page name div with specific class structure as specified in the request
                 page_name_element = wait.until(EC.visibility_of_element_located((
-                    By.XPATH, "//div[@aria-level='1' and contains(@class, 'x8t9es0') and contains(@class, 'x1ldc4aq') and contains(@class, 'x1xlr1w8') and contains(@class, 'x1cgboj8') and contains(@class, 'x4hq6eo') and contains(@class, 'xq9mrsl') and contains(@class, 'x1yc453h') and contains(@class, 'x1h4wwuj') and contains(@class, 'xeuugli') and @role='heading']"
+                    By.XPATH, "//div[@role='heading' and @aria-level='1']"
                 )))
                 
                 # Extract the page name
