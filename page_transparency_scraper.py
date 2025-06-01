@@ -22,7 +22,8 @@ from fb_antidetect_utils import (
     ProxyManager,
     create_stealth_driver,
     perform_human_like_scroll,
-    simulate_random_mouse_movements
+    simulate_random_mouse_movements,
+    add_random_delays
 
 )
 
