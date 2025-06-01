@@ -26,6 +26,9 @@ from fb_antidetect_utils import (
     add_random_delays
 )
 
+# Check if running in GitHub Actions
+is_github_actions = os.environ.get('GITHUB_ACTIONS') == 'true'
+
 # Set up logging system
 log_dir = "logs"
 os.makedirs(log_dir, exist_ok=True)
@@ -221,14 +224,43 @@ if __name__ == "__main__":
     
     # Set up stealth driver with anti-detection measures
     custom_print("Creating stealth browser driver with anti-detection measures")
-    driver = create_stealth_driver(
-        use_proxy=(proxy_manager is not None),
-        proxy_manager=proxy_manager,
-        headless=True  # Set to False to see the browser in action
-    )
+    # Check if we're in GitHub Actions
+    is_github_actions = os.environ.get('GITHUB_ACTIONS') == 'true'
+    
+    if is_github_actions:
+        custom_print("Running in GitHub Actions environment - using enhanced stealth settings")
+        # Use specialized settings for CI environment
+        driver = create_stealth_driver(
+            use_proxy=(proxy_manager is not None),
+            proxy_manager=proxy_manager,
+            headless=True,  # Must be headless in GitHub Actions
+            additional_options=[
+                "--disable-dev-shm-usage",
+                "--no-sandbox",
+                "--disable-gpu",
+                "--window-size=1920,1080",
+                "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+            ]
+        )
+    else:
+        # Use regular settings for local environment
+        driver = create_stealth_driver(
+            use_proxy=(proxy_manager is not None),
+            proxy_manager=proxy_manager,
+            headless=True  # Set to False to see the browser in action
+        )
     
     # Configure dynamic wait times (variable to appear more human-like)
-    wait_time = random.uniform(8, 12)  # Random wait between 8-12 seconds
+    # Use longer wait times in CI environment
+    is_github_actions = os.environ.get('GITHUB_ACTIONS') == 'true'
+    
+    if is_github_actions:
+        custom_print("Running in GitHub Actions environment - using extended timeouts")
+        wait_time = random.uniform(20, 30)  # Longer wait times for GitHub Actions (20-30 seconds)
+    else:
+        wait_time = random.uniform(8, 12)  # Regular wait for local environment (8-12 seconds)
+        
+    custom_print(f"Using wait timeout of {wait_time:.1f} seconds")
     wait = WebDriverWait(driver, wait_time)
     
     # Process URLs in sequential order (top to bottom) as they appear in the sheet
@@ -249,10 +281,33 @@ if __name__ == "__main__":
             
             # Wait for the page name element to be visible
             try:
-                # Looking for the page name div with specific class structure as specified in the request
-                page_name_element = wait.until(EC.visibility_of_element_located((
-                    By.XPATH, "//div[@aria-level='1' and contains(@class, 'x8t9es0') and contains(@class, 'x1ldc4aq') and contains(@class, 'x1xlr1w8') and contains(@class, 'x1cgboj8') and contains(@class, 'x4hq6eo') and contains(@class, 'xq9mrsl') and contains(@class, 'x1yc453h') and contains(@class, 'x1h4wwuj') and contains(@class, 'xeuugli') and @role='heading']"
-                )))
+                # Try multiple selectors to find the page name element
+                selectors = [
+                    # Original specific selector
+                    "//div[@aria-level='1' and contains(@class, 'x8t9es0') and contains(@class, 'x1ldc4aq') and contains(@class, 'x1xlr1w8') and contains(@class, 'x1cgboj8') and contains(@class, 'x4hq6eo') and contains(@class, 'xq9mrsl') and contains(@class, 'x1yc453h') and contains(@class, 'x1h4wwuj') and contains(@class, 'xeuugli') and @role='heading']",
+                    # Broader selector - any heading with aria-level 1
+                    "//div[@role='heading' and @aria-level='1']",
+                    # Very broad h1 selector
+                    "//h1",
+                    # Fallback to any element containing the page name
+                    "//div[contains(@class, 'x1yc453h')]"
+                ]
+                
+                # Try each selector until one works
+                page_name_element = None
+                for selector in selectors:
+                    try:
+                        custom_print(f"Trying selector: {selector}")
+                        page_name_element = wait.until(EC.visibility_of_element_located((By.XPATH, selector)))
+                        if page_name_element:
+                            custom_print(f"Found element using selector: {selector}")
+                            break
+                    except (TimeoutException, NoSuchElementException):
+                        custom_print(f"Selector failed: {selector}", "warning")
+                        continue
+                        
+                if not page_name_element:
+                    raise TimeoutException("All selectors failed to find page name element")
                 
                 # Extract the page name
                 page_name = page_name_element.text.strip()
@@ -269,22 +324,62 @@ if __name__ == "__main__":
             except TimeoutException:
                 custom_print(f"Timed out waiting for page name element on URL: {url}", "warning")
                 
-                # Try alternative XPath if the specific one fails
+                # Add more robust recovery methods for GitHub Actions
                 try:
-                    # More general heading search
-                    page_name_element = driver.find_element(By.XPATH, "//div[@role='heading' and @aria-level='1']")
-                    page_name = page_name_element.text.strip()
-                    custom_print(f"Found page name using alternative method: {page_name}")
+                    # Take a screenshot to debug in GitHub Actions
+                    if is_github_actions:
+                        try:
+                            screenshot_path = os.path.join("logs", f"fb_error_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png")
+                            driver.save_screenshot(screenshot_path)
+                            custom_print(f"Saved error screenshot to {screenshot_path}", "info")
+                        except Exception as ss_err:
+                            custom_print(f"Failed to save screenshot: {ss_err}", "error")
                     
-                    # Update the milk sheet with the page name
-                    if page_name and url in url_row_mapping:
-                        row_index = url_row_mapping[url]
-                        milk_worksheet.update_cell(row_index, page_col_idx, page_name)
-                        custom_print(f"Updated row {row_index}, column {page_col_idx} with page name: {page_name}")
-                    else:
-                        custom_print(f"Unable to update sheet with alternative method", "warning")
-                except NoSuchElementException:
-                    custom_print(f"Failed to find page name element with alternative method for URL: {url}", "error")
+                    # Try to get the page title as a fallback
+                    try:
+                        page_title = driver.title
+                        if page_title and "Facebook" in page_title:
+                            # Extract page name from title if possible
+                            title_parts = page_title.split("|")
+                            if len(title_parts) > 1:
+                                page_name = title_parts[0].strip()
+                                custom_print(f"Extracted page name from title: {page_name}")
+                                
+                                # Update the milk sheet with the page name
+                                if page_name and url in url_row_mapping:
+                                    row_index = url_row_mapping[url]
+                                    milk_worksheet.update_cell(row_index, page_col_idx, page_name)
+                                    custom_print(f"Updated row {row_index}, column {page_col_idx} with page name from title: {page_name}")
+                                    continue  # Skip to next URL since we succeeded
+                    except Exception as title_err:
+                        custom_print(f"Failed to extract from title: {title_err}", "error")
+                    
+                    # If in GitHub Actions, retry with longer wait and page refresh
+                    if is_github_actions:
+                        custom_print("GitHub Actions recovery attempt: refreshing page and retrying", "info")
+                        driver.refresh()
+                        time.sleep(5)  # Wait for refresh
+                        
+                        # Try a very broad selector as last resort
+                        try:
+                            # Look for any text that might contain the page name
+                            elements = driver.find_elements(By.XPATH, "//div[contains(@class, 'x1yc453h')][string-length(text()) > 3]")
+                            if elements:
+                                page_name = elements[0].text.strip()
+                                custom_print(f"Found possible page name using last resort method: {page_name}")
+                                
+                                # Update the milk sheet with the page name
+                                if page_name and url in url_row_mapping:
+                                    row_index = url_row_mapping[url]
+                                    milk_worksheet.update_cell(row_index, page_col_idx, page_name)
+                                    custom_print(f"Updated row {row_index}, column {page_col_idx} with possible page name: {page_name}")
+                                else:
+                                    custom_print(f"Unable to update sheet with last resort method", "warning")
+                        except Exception as last_err:
+                            custom_print(f"Last resort method failed: {last_err}", "error")
+                    
+                except Exception as recovery_err:
+                    custom_print(f"All recovery attempts failed for URL: {url}. Error: {recovery_err}", "error")
             
             except NoSuchElementException as e:
                 custom_print(f"Element not found: {e}", "error")
