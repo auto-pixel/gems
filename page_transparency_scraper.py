@@ -229,18 +229,16 @@ if __name__ == "__main__":
     
     if is_github_actions:
         custom_print("Running in GitHub Actions environment - using enhanced stealth settings")
-        # Use specialized settings for CI environment
+        # Set environment variables for GitHub Actions to improve browser stability
+        os.environ['MOZ_HEADLESS'] = '1'
+        os.environ['MOZ_DISABLE_GPU_SANDBOX'] = '1'
+        os.environ['MOZ_DISABLE_CONTENT_SANDBOX'] = '1'
+        
+        # Use standard create_stealth_driver call - the detection in fb_antidetect_utils will handle GitHub Actions settings
         driver = create_stealth_driver(
             use_proxy=(proxy_manager is not None),
             proxy_manager=proxy_manager,
-            headless=True,  # Must be headless in GitHub Actions
-            additional_options=[
-                "--disable-dev-shm-usage",
-                "--no-sandbox",
-                "--disable-gpu",
-                "--window-size=1920,1080",
-                "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-            ]
+            headless=True  # Must be headless in GitHub Actions
         )
     else:
         # Use regular settings for local environment
@@ -256,11 +254,14 @@ if __name__ == "__main__":
     
     if is_github_actions:
         custom_print("Running in GitHub Actions environment - using extended timeouts")
-        wait_time = random.uniform(20, 30)  # Longer wait times for GitHub Actions (20-30 seconds)
+        wait_time = 45  # Fixed longer timeout for GitHub Actions (45 seconds)
+        page_load_timeout = 60  # Longer page load timeout for GitHub Actions
+        driver.set_page_load_timeout(page_load_timeout)
+        custom_print(f"Set page load timeout to {page_load_timeout} seconds for GitHub Actions")
     else:
-        wait_time = random.uniform(8, 12)  # Regular wait for local environment (8-12 seconds)
+        wait_time = random.uniform(8, 12)  # Random wait for local environment (8-12 seconds)
         
-    custom_print(f"Using wait timeout of {wait_time:.1f} seconds")
+    custom_print(f"Using element wait timeout of {wait_time} seconds")
     wait = WebDriverWait(driver, wait_time)
     
     # Process URLs in sequential order (top to bottom) as they appear in the sheet
