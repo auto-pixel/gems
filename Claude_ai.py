@@ -3,6 +3,7 @@ import sys
 import time
 import logging
 import json
+import random
 import os
 from datetime import datetime
 import gspread
@@ -238,7 +239,7 @@ def init_claude_client():
         sys.exit(1)
 
 def analyze_transcript_with_claude(client, transcript):
-    """Analyze transcript using Claude AI API"""
+    """Analyze transcript using Claude AI API with robust retry mechanism"""
     if not transcript or transcript.strip() == "":
         return None
         
@@ -277,39 +278,71 @@ Return a JSON object with these keys:
 For each element, be specific and actionable. Make reasonable inferences when needed.
 """
 
-    try:
-        response = client.messages.create(
-            model="claude-opus-4-20250514",
-            max_tokens=4000,
-            temperature=0.1,
-            system="You are an expert marketing analyst and video production consultant.Analyze ad transcripts and return ONLY valid, properly formatted JSON with no additional text, commentary, or markdown.Use these exact keys: Angle, Hook, Storyline/Body, Characters used in script, Offer, Audience Targeted, Fomo or emotions evoked if any, CTA, Why this video works, Tips to improve the hook further, List 5 more characters/persons, Avatar_Type, Voice_Tone, Background_Setting, Script_Variations, Animation_Style, Key_Visuals, Duration_Recommendation, Thumbnail_Description.Make insights specific, actionable, and tailored. Ensure the output is strictly JSON that can be parsed programmatically.",
-            messages=[
-                {"role": "user", "content": prompt}
-            ]
-        )
-        
-        # Extract and parse JSON from Claude's response
-        response_text = response.content[0].text
-        # Find JSON content using common patterns
-        json_start = response_text.find('{')
-        json_end = response_text.rfind('}') + 1
-        
-        if json_start == -1 or json_end == 0:
-            log(f"Could not find JSON in Claude's response: {response_text[:100]}...", "error")
-            return None
-            
-        json_content = response_text[json_start:json_end]
-        
+    # Exponential backoff parameters
+    max_retries = 8  # Maximum number of retry attempts
+    base_delay = 1   # Base delay in seconds
+    max_delay = 60   # Maximum delay in seconds
+    retries = 0
+    
+    while retries <= max_retries:
         try:
-            result = json.loads(json_content)
-            return result
-        except json.JSONDecodeError as e:
-            log(f"Failed to parse Claude's JSON response: {e}\nResponse: {json_content[:200]}...", "error")
-            return None
+            # Make the API request
+            response = client.messages.create(
+                model="claude-3-7-sonnet-20250219",
+                max_tokens=4000,
+                temperature=0.1,
+                system="You are an expert marketing analyst and video production consultant.Analyze ad transcripts and return ONLY valid, properly formatted JSON with no additional text, commentary, or markdown.Use these exact keys: Angle, Hook, Storyline/Body, Characters used in script, Offer, Audience Targeted, Fomo or emotions evoked if any, CTA, Why this video works, Tips to improve the hook further, List 5 more characters/persons, Avatar_Type, Voice_Tone, Background_Setting, Script_Variations, Animation_Style, Key_Visuals, Duration_Recommendation, Thumbnail_Description.Make insights specific, actionable, and tailored. Ensure the output is strictly JSON that can be parsed programmatically.",
+                messages=[
+                    {"role": "user", "content": prompt}
+                ]
+            )
             
-    except Exception as e:
-        log(f"Claude API error: {e}", "error")
-        return None
+            # If we get here, the request was successful
+            # Extract and parse JSON from Claude's response
+            response_text = response.content[0].text
+            # Find JSON content using common patterns
+            json_start = response_text.find('{')
+            json_end = response_text.rfind('}') + 1
+            
+            if json_start == -1 or json_end == 0:
+                log(f"Could not find JSON in Claude's response: {response_text[:100]}...", "error")
+                return None
+                
+            json_content = response_text[json_start:json_end]
+            
+            try:
+                result = json.loads(json_content)
+                return result
+            except json.JSONDecodeError as e:
+                log(f"Failed to parse Claude's JSON response: {e}\nResponse: {json_content[:200]}...", "error")
+                return None
+                
+        except Exception as e:
+            error_str = str(e)
+            # Check if this is a 529 overloaded error
+            if "529" in error_str and "overloaded" in error_str.lower():
+                retries += 1
+                if retries > max_retries:
+                    log(f"Maximum retries ({max_retries}) exceeded for 529 Overloaded error", "error")
+                    log(f"Claude API error after all retries: {e}", "error")
+                    return None
+                
+                # Calculate delay with exponential backoff and jitter
+                delay = min(max_delay, base_delay * (2 ** (retries - 1)))
+                # Add some randomness (jitter) to prevent all retries happening at the same time
+                jitter = delay * 0.2 * (random.random() - 0.5)  # ±10% jitter
+                delay = delay + jitter
+                
+                log(f"Encountered 529 Overloaded error. Retry {retries}/{max_retries} after {delay:.2f} seconds", "warning")
+                time.sleep(delay)
+            else:
+                # For any other errors, don't retry
+                log(f"Claude API error: {e}", "error")
+                return None
+    
+    # If we get here, we've exceeded retries
+    log("Failed to get a successful response after all retries", "error")
+    return None
 
 # ============ PROGRESS TRACKING =============
 def update_progress_percentage(current, total):
