@@ -220,15 +220,12 @@ def init_claude_client():
             sys.exit(1)
     
     try:
-        # Mask the API key for logging (show only first 8 and last 4 chars)
+        # Use API key without logging it
         if CLAUDE_API_KEY:
-            masked_key = CLAUDE_API_KEY[:8] + '*****' + CLAUDE_API_KEY[-4:] if len(CLAUDE_API_KEY) > 12 else '*****'
-            log(f"Initializing Claude with API key: {masked_key} (length: {len(CLAUDE_API_KEY)})")
-            
             # Strip any leading/trailing whitespace from the API key
             clean_api_key = CLAUDE_API_KEY.strip()
-            log(f"Key after stripping whitespace: {clean_api_key[:8] + '*****' + clean_api_key[-4:] if len(clean_api_key) > 12 else '*****'} (length: {len(clean_api_key)})")
             
+            # Initialize client without logging key details
             client = anthropic.Anthropic(api_key=clean_api_key)
             return client
         else:
@@ -243,11 +240,7 @@ def analyze_transcript_with_claude(client, transcript):
     if not transcript or transcript.strip() == "":
         return None
         
-    # Debug the API key one more time before making the API call
-    api_key = client.api_key if hasattr(client, 'api_key') else "<no api_key attribute>"
-    if api_key:
-        masked_key = api_key[:8] + '*****' + api_key[-4:] if len(api_key) > 12 else '*****'
-        log(f"Using API key in request: {masked_key} (length: {len(api_key)})")
+    # API key is handled in the client initialization
     
     prompt = f"""
 Analyze this ad transcript and provide concise, specific insights for each category:
