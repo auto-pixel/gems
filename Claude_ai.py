@@ -279,7 +279,7 @@ For each element, be specific and actionable. Make reasonable inferences when ne
 
     try:
         response = client.messages.create(
-            model="claude-3-7-sonnet-20250219",
+            model="claude-opus-4-20250514",
             max_tokens=4000,
             temperature=0.1,
             system="You are an expert marketing analyst and video production consultant.Analyze ad transcripts and return ONLY valid, properly formatted JSON with no additional text, commentary, or markdown.Use these exact keys: Angle, Hook, Storyline/Body, Characters used in script, Offer, Audience Targeted, Fomo or emotions evoked if any, CTA, Why this video works, Tips to improve the hook further, List 5 more characters/persons, Avatar_Type, Voice_Tone, Background_Setting, Script_Variations, Animation_Style, Key_Visuals, Duration_Recommendation, Thumbnail_Description.Make insights specific, actionable, and tailored. Ensure the output is strictly JSON that can be parsed programmatically.",
