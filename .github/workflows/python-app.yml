@@ -8,7 +8,7 @@ on:
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 720 # Set appropriate timeout
+    timeout-minutes: 1200 # Set appropriate timeout
     
     steps:
       - name: Checkout code
