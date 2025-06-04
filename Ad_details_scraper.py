@@ -16,8 +16,6 @@ import gspread
 from google.oauth2.service_account import Credentials
 from google.auth.exceptions import GoogleAuthError
 import logging
-import os
-import sys
 import random
 import concurrent.futures
 from queue import Queue
@@ -229,7 +227,7 @@ else:
     custom_print("No proxy file found or proxies disabled. Will run without proxies.", "warning")
 
 def create_driver(proxy=None):
-    """Create a new WebDriver instance with the given proxy"""
+    """Create a new WebDriver instance with the given proxy and CI support"""
     options = Options()
     options.headless = True
     
@@ -244,20 +242,13 @@ def create_driver(proxy=None):
     # Additional stealth options
     options.set_preference('dom.webdriver.enabled', False)
     options.set_preference('useAutomationExtension', False)
-    options.set_preference('permissions.default.image', 2)  # Disable images
-    
-    # Randomize user agent
-    ua = UserAgent()
-    user_agent = ua.random
-    options.set_preference('general.useragent.override', user_agent)
-    
-    # Initialize WebDriver with error handling
+    # CI-specific: longer timeouts
+    page_load_timeout = PAGE_LOAD_TIMEOUT if 'PAGE_LOAD_TIMEOUT' in globals() else 30
     max_retries = 3
     for attempt in range(max_retries):
         try:
             driver = webdriver.Firefox(options=options)
-            # Set page load timeout
-            driver.set_page_load_timeout(REQUEST_TIMEOUT)
+            driver.set_page_load_timeout(page_load_timeout)
             return driver
         except Exception as e:
             if attempt == max_retries - 1:
@@ -326,9 +317,9 @@ def get_wait_time(base=5, jitter=3):
 
 # Default WebDriverWait with dynamic timeout
 def get_webdriver_wait(driver, timeout=None):
-    """Get a WebDriverWait instance with dynamic timeout"""
+    """Get a WebDriverWait instance with dynamic timeout and CI support"""
     if timeout is None:
-        timeout = get_wait_time(10, 5)  # Base 10s ±5s
+        timeout = REQUEST_TIMEOUT if 'REQUEST_TIMEOUT' in globals() else get_wait_time(10, 5)
     return WebDriverWait(driver, timeout)
 
 # Variable to store the result string for notification
@@ -339,35 +330,30 @@ column_indices = {}
 
 # Google Sheets setup
 def setup_google_sheets(sheet_name="Master Auto Swipe - Test ankur", worksheet_name="Ads Details", credentials_path="credentials.json"):
-    """Connect to Google Sheets and return the specified worksheet"""
+    """Connect to Google Sheets and return the specified worksheet. Robust for CI."""
     try:
         # Scopes required for Google Sheets
         scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
-        
+        # Check credentials path
+        if not os.path.exists(credentials_path):
+            custom_print(f"[CI] Google Sheets credentials file '{credentials_path}' not found!", "error")
+            sys.exit(1)
         # Authenticate using service account credentials
         credentials = Credentials.from_service_account_file(credentials_path, scopes=scope)
-        
-        # Create a gspread client
         gc = gspread.authorize(credentials)
-        
-        # Open the spreadsheet by name
         spreadsheet = gc.open(sheet_name)
-        custom_print(f"Successfully connected to spreadsheet: {sheet_name}")
-        
-        # Access the specified worksheet
         worksheet = spreadsheet.worksheet(worksheet_name)
         custom_print(f"Successfully accessed worksheet: {worksheet_name}")
-        
         return worksheet
     except FileNotFoundError:
         custom_print(f"Error: Credentials file '{credentials_path}' not found.")
-        return None
+        sys.exit(1)
     except GoogleAuthError as e:
         custom_print(f"Authentication error: {e}")
-        return None
+        sys.exit(1)
     except Exception as e:
         custom_print(f"Error connecting to Google Sheets: {e}")
-        return None
+        sys.exit(1)
 
 # Function to extract URLs from Milk worksheet
 def extract_urls_from_milk_worksheet(worksheet):
