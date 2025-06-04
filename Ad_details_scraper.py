@@ -578,7 +578,7 @@ while len(processed_urls) < len(urls):
             # Ultra-minimal wait times for fastest scraping
             if random.random() < 0.05:  # 5% chance of slightly longer wait
                 custom_print("Using minimal extended waiting pattern...")
-                wait_time = random.uniform(0.5, 0.8)
+                wait_time = random.uniform(0.1, 0.5)
                 add_random_delays(wait_time, wait_time + 0.2)
             else:
                 add_random_delays(0.1, 0.3)  # Extremely short delays
@@ -589,7 +589,7 @@ while len(processed_urls) < len(urls):
                 simulate_random_mouse_movements(driver, num_movements=num_movements)
             
             # Ultra-minimal wait for initial content to load
-            wait_time = random.uniform(0.3, 0.8)  # Ultra-short wait
+            wait_time = random.uniform(0.3, 0.5)  # Ultra-short wait
             custom_print(f"Waiting {wait_time:.1f} seconds for content to load...")
             time.sleep(wait_time)
             
@@ -1175,7 +1175,7 @@ while len(processed_urls) < len(urls):
     
     # Add random delay after scrolling completes (more human-like)
     custom_print("Adding random delay after scrolling to appear more natural...")
-    add_random_delays(2.0, 5.0)
+    add_random_delays(1.0, 3.0)
 
     # Safety catch in case end-of-results text wasn't found
     if not element_found:
@@ -1250,7 +1250,7 @@ while len(processed_urls) < len(urls):
                     
                     # Try to reload current URL
                     driver.get(url)
-                    time.sleep(random.uniform(1, 6))
+                    time.sleep(random.uniform(1, 3))
                     
                     # Skip current ad group and continue with next URL
                     break
