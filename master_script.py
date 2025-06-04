@@ -197,14 +197,6 @@ def main():
         {
             "name": "Ad_details_scraper.py", 
             "description": "Ad Details Scraper"
-        },
-        {
-            "name": "transcript_bot.py", 
-            "description": "Transcript Bot"
-        },
-        {
-            "name": "Claude_ai.py", 
-            "description": "Claude AI Analysis"
         }
     ]
     
