@@ -4,13 +4,13 @@ from selenium.webdriver.firefox.service import Service
 from selenium.webdriver.firefox.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import NoSuchElementException, TimeoutException
+from selenium.common.exceptions import NoSuchElementException, TimeoutException, WebDriverException
 from selenium.webdriver.common.action_chains import ActionChains
 from webdriver_manager.firefox import GeckoDriverManager
 import time
 import re
-from datetime import datetime
-from urllib.parse import unquote, urlparse
+from datetime import datetime, timedelta
+from urllib.parse import unquote, urlparse, parse_qs
 import json
 import gspread
 from google.oauth2.service_account import Credentials
@@ -19,7 +19,14 @@ import logging
 import os
 import sys
 import random
-from datetime import datetime
+import concurrent.futures
+from queue import Queue
+from threading import Lock
+import requests
+from fake_useragent import UserAgent
+import backoff
+from requests.adapters import HTTPAdapter
+from requests.packages.urllib3.util.retry import Retry
 
 # Import anti-detection utilities
 from fb_antidetect_utils import (
@@ -30,6 +37,105 @@ from fb_antidetect_utils import (
     add_random_delays,
     get_current_ip
 )
+
+# Global variables
+MAX_WORKERS = 3  # Number of concurrent scrapers
+REQUEST_TIMEOUT = 30  # seconds
+MAX_RETRIES = 3
+PROXY_TIMEOUT = 10  # seconds
+LOCK = Lock()
+
+class ProxyManagerEnhanced(ProxyManager):
+    def __init__(self, proxy_file=None, proxies=None):
+        super().__init__(proxy_file=proxy_file, proxies=proxies)
+        self.proxy_failures = {}
+        self.proxy_blacklist = set()
+        self.max_failures = 3
+        self.lock = Lock()
+        self.session = self._create_session()
+    
+    def _create_session(self):
+        """Create a requests session with retry logic"""
+        session = requests.Session()
+        retry_strategy = Retry(
+            total=3,
+            backoff_factor=1,
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["GET", "POST"]
+        )
+        adapter = HTTPAdapter(max_retries=retry_strategy)
+        session.mount("http://", adapter)
+        session.mount("https://", adapter)
+        return session
+    
+    def get_proxy(self):
+        """Get a random working proxy"""
+        with self.lock:
+            if not self.proxies:
+                return None
+                
+            # Remove blacklisted proxies
+            self.proxies = [p for p in self.proxies if p not in self.proxy_blacklist]
+            
+            if not self.proxies:
+                return None
+                
+            # Sort proxies by failure count (ascending)
+            self.proxies.sort(key=lambda x: self.proxy_failures.get(x, 0))
+            
+            # Return the least failed proxy
+            return self.proxies[0]
+    
+    def mark_failed(self, proxy):
+        """Mark a proxy as failed"""
+        with self.lock:
+            if proxy not in self.proxy_failures:
+                self.proxy_failures[proxy] = 0
+            self.proxy_failures[proxy] += 1
+            
+            if self.proxy_failures[proxy] >= self.max_failures:
+                self.proxy_blacklist.add(proxy)
+                custom_print(f"Proxy {proxy} blacklisted after {self.max_failures} failures", "warning")
+    
+    def is_proxy_working(self, proxy):
+        """Check if a proxy is working"""
+        if not proxy:
+            return False
+            
+        proxies = {
+            'http': f'http://{proxy}',
+            'https': f'http://{proxy}'
+        }
+        
+        try:
+            # Test with a small, fast request
+            response = self.session.get(
+                'http://httpbin.org/ip',
+                proxies=proxies,
+                timeout=PROXY_TIMEOUT
+            )
+            return response.status_code == 200
+        except Exception as e:
+            custom_print(f"Proxy {proxy} test failed: {str(e)}", "debug")
+            return False
+    
+    def get_working_proxy(self):
+        """Get a working proxy with verification"""
+        max_attempts = len(self.proxies) * 2  # Try each proxy up to 2 times
+        attempts = 0
+        
+        while attempts < max_attempts:
+            proxy = self.get_proxy()
+            if not proxy:
+                break
+                
+            if self.is_proxy_working(proxy):
+                return proxy
+                
+            self.mark_failed(proxy)
+            attempts += 1
+            
+        return None
 
 # Set up logging system
 log_dir = "logs"
@@ -79,42 +185,151 @@ CATEGORY_MAPPING = {
     ("https://static.xx.fbcdn.net/rsrc.php/v4/yO/r/ZuVkzM77JQ-.png", "-56px -206px"): "Financial products and services",
 }
 
-# Configure proxy manager with enhanced proxy handling
+# Configure enhanced proxy manager
 proxy_file = "proxies.txt"  # Proxy file in ip:port format, one per line
 proxy_manager = None
 use_proxies = True  # Set to False to temporarily disable proxy usage
 
 if os.path.exists(proxy_file) and use_proxies:
-    custom_print("Initializing proxy manager with proxies from file")
+    custom_print("Initializing enhanced proxy manager with proxies from file")
     try:
-        # Count the number of proxies in the file
+        # Load and validate proxies
         with open(proxy_file, 'r') as f:
-            proxy_count = sum(1 for line in f if line.strip() and not line.strip().startswith('#'))
+            proxies = [line.strip() for line in f if line.strip() and not line.strip().startswith('#')]
         
-        if proxy_count > 0:
-            custom_print(f"Found {proxy_count} proxies in {proxy_file}")
-            proxy_manager = ProxyManager(proxy_file=proxy_file)
+        if proxies:
+            custom_print(f"Found {len(proxies)} proxies in {proxy_file}")
+            proxy_manager = ProxyManagerEnhanced(proxies=proxies)
+            
+            # Test proxies in parallel
+            with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+                future_to_proxy = {executor.submit(proxy_manager.is_proxy_working, proxy): proxy for proxy in proxies}
+                for future in concurrent.futures.as_completed(future_to_proxy):
+                    proxy = future_to_proxy[future]
+                    try:
+                        if future.result():
+                            custom_print(f"Proxy {proxy} is working")
+                        else:
+                            custom_print(f"Proxy {proxy} is not working", "warning")
+                    except Exception as e:
+                        custom_print(f"Error testing proxy {proxy}: {e}", "error")
+            
+            working_proxies = [p for p in proxies if p not in proxy_manager.proxy_blacklist]
+            custom_print(f"Found {len(working_proxies)} working proxies out of {len(proxies)}")
+            
+            if not working_proxies:
+                custom_print("No working proxies found. Will run without proxies.", "warning")
+                proxy_manager = None
         else:
-            custom_print("No usable proxies found in proxy file. Will run without proxies.", "warning")
+            custom_print("No valid proxies found in proxy file. Will run without proxies.", "warning")
     except Exception as e:
-        custom_print(f"Error loading proxies: {e}", "error")
+        custom_print(f"Error initializing proxy manager: {e}", "error")
         custom_print("Will run without proxies due to error.", "warning")
 else:
     custom_print("No proxy file found or proxies disabled. Will run without proxies.", "warning")
-    # You can also provide proxies directly if needed:
-    # proxy_manager = ProxyManager(proxies=["IP:PORT", "IP:PORT"])
 
-# Set up stealth driver with anti-detection measures
-custom_print("Creating stealth browser driver with anti-detection measures")
-driver = create_stealth_driver(
-    use_proxy=(proxy_manager is not None),
-    proxy_manager=proxy_manager,
-    headless=True  # Set to False to see the browser in action
-)
+def create_driver(proxy=None):
+    """Create a new WebDriver instance with the given proxy"""
+    options = Options()
+    options.headless = True
+    
+    # Set proxy if provided
+    if proxy:
+        options.set_preference('network.proxy.type', 1)
+        options.set_preference('network.proxy.http', proxy.split(':')[0])
+        options.set_preference('network.proxy.http_port', int(proxy.split(':')[1]))
+        options.set_preference('network.proxy.ssl', proxy.split(':')[0])
+        options.set_preference('network.proxy.ssl_port', int(proxy.split(':')[1]))
+    
+    # Additional stealth options
+    options.set_preference('dom.webdriver.enabled', False)
+    options.set_preference('useAutomationExtension', False)
+    options.set_preference('permissions.default.image', 2)  # Disable images
+    
+    # Randomize user agent
+    ua = UserAgent()
+    user_agent = ua.random
+    options.set_preference('general.useragent.override', user_agent)
+    
+    # Initialize WebDriver with error handling
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            driver = webdriver.Firefox(options=options)
+            # Set page load timeout
+            driver.set_page_load_timeout(REQUEST_TIMEOUT)
+            return driver
+        except Exception as e:
+            if attempt == max_retries - 1:
+                custom_print(f"Failed to create WebDriver after {max_retries} attempts: {e}", "error")
+                raise
+            time.sleep(2 ** attempt)  # Exponential backoff
 
-# Configure dynamic wait times (variable to appear more human-like)
-wait_time = random.uniform(8, 12)  # Random wait between 8-12 seconds
-wait = WebDriverWait(driver, wait_time)
+# Create a driver pool
+DRIVER_POOL = Queue()
+
+def get_driver():
+    """Get a WebDriver instance from the pool or create a new one"""
+    if not DRIVER_POOL.empty():
+        return DRIVER_POOL.get()
+    
+    proxy = None
+    if proxy_manager:
+        proxy = proxy_manager.get_working_proxy()
+        if not proxy:
+            custom_print("No working proxies available. Will try without proxy.", "warning")
+    
+    try:
+        driver = create_driver(proxy)
+        return driver
+    except Exception as e:
+        if proxy:
+            proxy_manager.mark_failed(proxy)
+        custom_print(f"Error creating WebDriver: {e}", "error")
+        raise
+
+def release_driver(driver):
+    """Release a WebDriver instance back to the pool"""
+    try:
+        # Clear cookies and cache
+        driver.delete_all_cookies()
+        driver.execute_script("window.localStorage.clear();")
+        driver.execute_script("window.sessionStorage.clear();")
+        
+        # Reset the page to clear any state
+        driver.get("about:blank")
+        
+        # Add back to pool if not too many drivers
+        if DRIVER_POOL.qsize() < MAX_WORKERS * 2:  # Limit pool size
+            DRIVER_POOL.put(driver)
+        else:
+            driver.quit()
+    except Exception as e:
+        custom_print(f"Error releasing driver: {e}", "error")
+        try:
+            driver.quit()
+        except:
+            pass
+
+# Initialize driver pool
+for _ in range(MAX_WORKERS):
+    try:
+        driver = get_driver()
+        DRIVER_POOL.put(driver)
+    except Exception as e:
+        custom_print(f"Failed to initialize driver pool: {e}", "error")
+
+# Configure dynamic wait times with jitter
+def get_wait_time(base=5, jitter=3):
+    """Get a random wait time with jitter"""
+    return base + random.uniform(-jitter, jitter)
+
+# Default WebDriverWait with dynamic timeout
+def get_webdriver_wait(driver, timeout=None):
+    """Get a WebDriverWait instance with dynamic timeout"""
+    if timeout is None:
+        timeout = get_wait_time(10, 5)  # Base 10s ±5s
+    return WebDriverWait(driver, timeout)
 
 # Variable to store the result string for notification
 result_string = ""
@@ -375,9 +590,230 @@ def update_progress_percentage():
         # This ensures the progress is visible in GitHub Actions logs
         sys.stdout.flush()
 
-# Process each URL from the Milk worksheet one at a time and update the sheet after each
-# Continue until all URLs have been processed
-url_index = 0
+def process_url(url_data):
+    """Process a single URL with retry logic and ensure Milk sheet is updated"""
+    url, url_index, total_urls, page_name = url_data
+    driver = None
+    max_retries = 3
+    result = {
+        'success': False,
+        'url': url,
+        'page_name': page_name,
+        'ad_count': 0,
+        'error': None
+    }
+    
+    for attempt in range(max_retries):
+        try:
+            # Get a driver from the pool
+            driver = get_driver()
+            wait = get_webdriver_wait(driver)
+            
+            custom_print(f"Processing URL {url_index}/{total_urls}: {url}")
+            
+            # Navigate to the URL
+            custom_print(f"Loading URL: {url}")
+            driver.get(url)
+            
+            # Wait for the page to load
+            wait.until(EC.presence_of_element_located((By.TAG_NAME, 'body')))
+            
+            # Extract ad count
+            try:
+                ad_count_element = wait.until(
+                    EC.presence_of_element_located((By.XPATH, "//div[contains(text(), 'results')]"))
+                )
+                ad_count_text = ad_count_element.text.strip()
+                ad_count = int(''.join(filter(str.isdigit, ad_count_text)))
+                result['ad_count'] = ad_count
+                custom_print(f"Found {ad_count} ads for {page_name}")
+            except Exception as e:
+                custom_print(f"Could not extract ad count: {e}", "warning")
+                result['ad_count'] = 0
+            
+            # Update Milk sheet with the ad count
+            update_milk_sheet(url, page_name, result['ad_count'])
+            
+            # Mark as successful
+            result['success'] = True
+            return result
+            
+        except Exception as e:
+            error_msg = str(e)
+            custom_print(f"Attempt {attempt + 1} failed for URL {url}: {error_msg}", "error")
+            result['error'] = error_msg
+            
+            # If we have a proxy manager and this might be a proxy issue, mark the proxy as failed
+            if proxy_manager and driver and hasattr(driver, 'proxy'):
+                proxy_manager.mark_failed(driver.proxy)
+            
+            if attempt == max_retries - 1:  # Last attempt
+                custom_print(f"Failed to process URL {url} after {max_retries} attempts", "error")
+                # Update Milk sheet with failure status
+                update_milk_sheet(url, page_name, 0, error=error_msg)
+                return result
+            
+            # Exponential backoff before retry
+            time.sleep(2 ** attempt)
+            
+        finally:
+            # Always release the driver back to the pool
+            if driver:
+                release_driver(driver)
+    
+    return False
+
+def update_milk_sheet(url, page_name, ad_count, error=None):
+    """Update the Milk sheet with the ad count and status"""
+    if not milk_worksheet:
+        custom_print("Milk worksheet not available for update", "warning")
+        return False
+    
+    try:
+        # Get all rows to find the matching page
+        all_rows = milk_worksheet.get_all_values()
+        headers = all_rows[0] if all_rows else []
+        
+        # Find the row index for this page
+        row_index = None
+        page_col_idx = None
+        trans_col_idx = None
+        
+        # Find column indices
+        for idx, header in enumerate(headers):
+            header_lower = header.lower().strip()
+            if header_lower in ['page', 'page name', 'name']:
+                page_col_idx = idx
+            elif header_lower in ['page transparency', 'transparency url']:
+                trans_col_idx = idx
+        
+        if page_col_idx is None or trans_col_idx is None:
+            custom_print("Could not find required columns in Milk sheet", "error")
+            return False
+        
+        # Find the matching row
+        for i, row in enumerate(all_rows[1:], start=2):  # Skip header row
+            if len(row) > max(page_col_idx, trans_col_idx):
+                page_name_match = row[page_col_idx].strip().lower() == page_name.lower()
+                url_match = url in (row[trans_col_idx].strip(), '')
+                if page_name_match or url_match:
+                    row_index = i
+                    break
+        
+        if row_index:
+            # Prepare update data
+            update_data = {}
+            
+            # Find or create columns for our data
+            columns_to_find = [
+                'Ad Count', 'Last Checked', 'Status', 'Error'
+            ]
+            
+            for col_name in columns_to_find:
+                if col_name not in headers:
+                    # Add new column
+                    col_idx = len(headers)
+                    milk_worksheet.update_cell(1, col_idx + 1, col_name)
+                    headers.append(col_name)
+            
+            # Update the row
+            current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            
+            # Get column indices
+            col_indices = {col: headers.index(col) for col in headers if col in columns_to_find}
+            
+            # Prepare row data
+            row_data = [''] * len(headers)
+            
+            # Copy existing data
+            if row_index - 1 < len(all_rows):
+                existing_row = all_rows[row_index - 1]
+                for i, val in enumerate(existing_row):
+                    if i < len(row_data):
+                        row_data[i] = val
+            
+            # Update with new data
+            if 'Ad Count' in col_indices:
+                row_data[col_indices['Ad Count']] = str(ad_count)
+            if 'Last Checked' in col_indices:
+                row_data[col_indices['Last Checked']] = current_time
+            if 'Status' in col_indices:
+                row_data[col_indices['Status']] = 'Success' if error is None else 'Failed'
+            if 'Error' in col_indices and error:
+                row_data[col_indices['Error']] = error[:100]  # Truncate long errors
+            
+            # Update the row
+            milk_worksheet.update(f"A{row_index}", [row_data])
+            custom_print(f"Updated Milk sheet for {page_name} with {ad_count} ads")
+            return True
+        else:
+            custom_print(f"Could not find row for page: {page_name}", "warning")
+            return False
+            
+    except Exception as e:
+        custom_print(f"Error updating Milk sheet: {e}", "error")
+        return False
+
+def process_urls_in_parallel(urls, page_names):
+    """Process all URLs in parallel and return results"""
+    # Prepare URL data for processing with page names
+    urls_to_process = []
+    for i, (url, page_name) in enumerate(zip(urls, [page_names.get(url, f"Page {i+1}") for i, url in enumerate(urls)])):
+        urls_to_process.append((url, i+1, len(urls), page_name))
+
+    # Use ThreadPoolExecutor for parallel processing
+    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        # Submit all URLs for processing
+        future_to_url = {executor.submit(process_url, url_data): url_data for url_data in urls_to_process}
+        
+        # Process results as they complete
+        results = []
+        for future in concurrent.futures.as_completed(future_to_url):
+            url_data = future_to_url[future]
+            try:
+                result = future.result()
+                results.append(result)
+                if result['success']:
+                    custom_print(f"Successfully processed {result['page_name']}: {result['ad_count']} ads")
+                else:
+                    custom_print(f"Failed to process {result['page_name']}: {result.get('error', 'Unknown error')}", "error")
+            except Exception as e:
+                error_msg = str(e)
+                custom_print(f"Error processing URL {url_data[0]}: {error_msg}", "error")
+                results.append({
+                    'url': url_data[0],
+                    'page_name': url_data[3] if len(url_data) > 3 else 'Unknown',
+                    'success': False,
+                    'error': error_msg,
+                    'ad_count': 0
+                })
+        
+        # Generate summary report
+        success_count = sum(1 for r in results if r.get('success', False))
+        total_ads = sum(r.get('ad_count', 0) for r in results)
+        
+        custom_print("\n" + "="*50)
+        custom_print("PROCESSING COMPLETE")
+        custom_print("="*50)
+        custom_print(f"Total URLs processed: {len(results)}")
+        custom_print(f"Successfully processed: {success_count}")
+        custom_print(f"Failed: {len(results) - success_count}")
+        custom_print(f"Total ads found: {total_ads}")
+        custom_print("="*50)
+        
+        # Print failed URLs for reference
+        failed_urls = [r for r in results if not r.get('success', False)]
+        if failed_urls:
+            custom_print("\nFailed URLs:")
+            for item in failed_urls:
+                custom_print(f"- {item.get('page_name', 'Unknown')}: {item.get('url')} - {item.get('error', 'Unknown error')}")
+        
+        return results
+
+# Process URLs in parallel with thread pool
+custom_print(f"Starting to process {len(urls)} URLs with {MAX_WORKERS} workers")
+# Process all URLs and get results
+results = process_urls_in_parallel(urls, page_names)
 
 # First, check which URLs have already been processed in the milk sheet recently
 previously_processed_urls = set()
