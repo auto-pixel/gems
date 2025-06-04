@@ -258,6 +258,39 @@ proxy_manager = ProxyManager()
 
 # Get and log the current IP
 current_ip = get_current_ip()
+
+# Check if we got Unknown IP and try to get a fallback IP for GitHub Actions
+if current_ip == "Unknown IP" or not current_ip:
+    custom_print("Detected 'Unknown IP', attempting to get fallback IP...", "warning")
+    try:
+        # Simple fallback for GitHub Actions - use a public IP service
+        import requests
+        # Try ipify first (most reliable)
+        try:
+            response = requests.get("https://api.ipify.org", timeout=5)
+            if response.status_code == 200:
+                current_ip = response.text.strip()
+                custom_print(f"Got fallback IP from ipify: {current_ip}")
+        except Exception:
+            # If that fails, try another service
+            try:
+                response = requests.get("https://ifconfig.me/ip", timeout=5)
+                if response.status_code == 200:
+                    current_ip = response.text.strip()
+                    custom_print(f"Got fallback IP from ifconfig.me: {current_ip}")
+            except Exception:
+                # Last resort - generate a GitHub Actions identifier
+                from datetime import datetime
+                run_id = os.environ.get('GITHUB_RUN_ID', '')
+                if run_id:
+                    current_ip = f"GitHub-{run_id}"
+                else:
+                    current_ip = f"GitHub-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+                custom_print(f"Using GitHub identifier as IP: {current_ip}")
+    except Exception as e:
+        custom_print(f"Error getting fallback IP: {e}", "error")
+        current_ip = f"GitHub-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+
 custom_print(f"Using IP: {current_ip} for scraping")
 
 # First try to connect to the Milk worksheet (for URL sources)
