@@ -591,7 +591,7 @@ def update_progress_percentage():
         sys.stdout.flush()
 
 def process_url(url_data):
-    """Process a single URL with retry logic and ensure Milk sheet is updated"""
+    """Process a single URL with retry logic and ensure Milk sheet is updated. Optimized for speed and robustness."""
     url, url_index, total_urls, page_name = url_data
     driver = None
     max_retries = 3
@@ -600,68 +600,108 @@ def process_url(url_data):
         'url': url,
         'page_name': page_name,
         'ad_count': 0,
-        'error': None
+        'error': [],  # Store all errors for debugging
     }
-    
+
     for attempt in range(max_retries):
         try:
-            # Get a driver from the pool
-            driver = get_driver()
-            wait = get_webdriver_wait(driver)
-            
-            custom_print(f"Processing URL {url_index}/{total_urls}: {url}")
-            
-            # Navigate to the URL
-            custom_print(f"Loading URL: {url}")
-            driver.get(url)
-            
-            # Wait for the page to load
-            wait.until(EC.presence_of_element_located((By.TAG_NAME, 'body')))
-            
-            # Extract ad count
+            driver = None
             try:
-                ad_count_element = wait.until(
-                    EC.presence_of_element_located((By.XPATH, "//div[contains(text(), 'results')]"))
-                )
-                ad_count_text = ad_count_element.text.strip()
-                ad_count = int(''.join(filter(str.isdigit, ad_count_text)))
-                result['ad_count'] = ad_count
-                custom_print(f"Found {ad_count} ads for {page_name}")
+                driver = get_driver()
             except Exception as e:
-                custom_print(f"Could not extract ad count: {e}", "warning")
-                result['ad_count'] = 0
-            
+                result['error'].append(f"get_driver() failed: {str(e)}")
+                custom_print(f"[Attempt {attempt+1}] get_driver() failed: {e}", "error")
+                time.sleep(2 ** attempt)
+                continue
+
+            wait = get_webdriver_wait(driver, timeout=15)  # Use shorter, smarter wait
+            custom_print(f"[{page_name}] Processing URL {url_index}/{total_urls}: {url}")
+
+            # Navigate to the URL with 'eager' page load strategy for speed
+            try:
+                driver.execute_cdp_cmd('Page.setLifecycleEventsEnabled', {'enabled': True})
+            except Exception:
+                pass  # Not all drivers support this
+            try:
+                driver.get(url)
+            except Exception as e:
+                result['error'].append(f"driver.get() failed: {str(e)}")
+                custom_print(f"[Attempt {attempt+1}] driver.get() failed: {e}", "error")
+                raise
+
+            # Wait for the main ad container or fallback to body
+            try:
+                wait.until(EC.presence_of_element_located((By.XPATH, "//div[contains(@class, 'ad') or contains(text(), 'results') or @role='main']")))
+            except Exception:
+                wait.until(EC.presence_of_element_located((By.TAG_NAME, 'body')))
+
+            # Extract ad count robustly
+            ad_count = 0
+            try:
+                # Try multiple selectors for robustness
+                selectors = [
+                    "//div[contains(text(), 'results')]",
+                    "//span[contains(text(), 'results')]",
+                    "//div[contains(@class, 'ad-count')]",
+                ]
+                ad_count_text = None
+                for selector in selectors:
+                    try:
+                        elem = driver.find_element(By.XPATH, selector)
+                        ad_count_text = elem.text.strip()
+                        if ad_count_text:
+                            break
+                    except Exception:
+                        continue
+                if ad_count_text:
+                    ad_count = int(''.join(filter(str.isdigit, ad_count_text)))
+                    custom_print(f"[{page_name}] Found {ad_count} ads.")
+                else:
+                    custom_print(f"[{page_name}] Could not find ad count element.", "warning")
+            except Exception as e:
+                custom_print(f"[{page_name}] Error extracting ad count: {e}", "warning")
+            result['ad_count'] = ad_count
+
             # Update Milk sheet with the ad count
-            update_milk_sheet(url, page_name, result['ad_count'])
-            
+            try:
+                update_milk_sheet(url, page_name, ad_count)
+            except Exception as e:
+                custom_print(f"[{page_name}] Error updating Milk sheet: {e}", "error")
+                result['error'].append(f"update_milk_sheet error: {str(e)}")
+
             # Mark as successful
             result['success'] = True
             return result
-            
+
         except Exception as e:
             error_msg = str(e)
-            custom_print(f"Attempt {attempt + 1} failed for URL {url}: {error_msg}", "error")
-            result['error'] = error_msg
-            
-            # If we have a proxy manager and this might be a proxy issue, mark the proxy as failed
-            if proxy_manager and driver and hasattr(driver, 'proxy'):
-                proxy_manager.mark_failed(driver.proxy)
-            
-            if attempt == max_retries - 1:  # Last attempt
-                custom_print(f"Failed to process URL {url} after {max_retries} attempts", "error")
-                # Update Milk sheet with failure status
-                update_milk_sheet(url, page_name, 0, error=error_msg)
+            custom_print(f"[Attempt {attempt + 1}] Failed for URL {url}: {error_msg}", "error")
+            result['error'].append(error_msg)
+
+            # Robust proxy handling
+            if proxy_manager and hasattr(driver, 'proxy'):
+                try:
+                    proxy_manager.mark_failed(getattr(driver, 'proxy', None))
+                except Exception as proxy_err:
+                    custom_print(f"Proxy marking failed: {proxy_err}", "debug")
+
+            if attempt == max_retries - 1:
+                custom_print(f"[{page_name}] Failed to process URL after {max_retries} attempts", "error")
+                try:
+                    update_milk_sheet(url, page_name, 0, error='; '.join(result['error']))
+                except Exception as e2:
+                    custom_print(f"[{page_name}] Error updating Milk sheet on final failure: {e2}", "error")
                 return result
-            
-            # Exponential backoff before retry
             time.sleep(2 ** attempt)
-            
         finally:
-            # Always release the driver back to the pool
             if driver:
-                release_driver(driver)
-    
-    return False
+                try:
+                    release_driver(driver)
+                except Exception as e:
+                    custom_print(f"Error releasing driver: {e}", "warning")
+
+    return result
+
 
 def update_milk_sheet(url, page_name, ad_count, error=None):
     """Update the Milk sheet with the ad count and status"""
