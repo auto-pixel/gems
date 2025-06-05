@@ -115,7 +115,7 @@ class ProxyManager:
     def _test_proxy(self, proxy):
         """Test if a proxy is working"""
         try:
-            test_url = "https://httpbin.org/ip"
+            test_url = "https://api.ipify.org"
             proxies = {
                 "http": f"http://{proxy}",
                 "https": f"http://{proxy}"
