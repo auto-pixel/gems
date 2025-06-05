@@ -113,7 +113,7 @@ driver = create_stealth_driver(
 )
 
 # Configure dynamic wait times (variable to appear more human-like)
-wait_time = random.uniform(1, 5)  # Random wait between 8-12 seconds
+wait_time = random.uniform(8, 12)  # Random wait between 8-12 seconds
 wait = WebDriverWait(driver, wait_time)
 
 # Variable to store the result string for notification
@@ -258,39 +258,6 @@ proxy_manager = ProxyManager()
 
 # Get and log the current IP
 current_ip = get_current_ip()
-
-# Check if we got Unknown IP and try to get a fallback IP for GitHub Actions
-if current_ip == "Unknown IP" or not current_ip:
-    custom_print("Detected 'Unknown IP', attempting to get fallback IP...", "warning")
-    try:
-        # Simple fallback for GitHub Actions - use a public IP service
-        import requests
-        # Try ipify first (most reliable)
-        try:
-            response = requests.get("https://api.ipify.org", timeout=5)
-            if response.status_code == 200:
-                current_ip = response.text.strip()
-                custom_print(f"Got fallback IP from ipify: {current_ip}")
-        except Exception:
-            # If that fails, try another service
-            try:
-                response = requests.get("https://ifconfig.me/ip", timeout=5)
-                if response.status_code == 200:
-                    current_ip = response.text.strip()
-                    custom_print(f"Got fallback IP from ifconfig.me: {current_ip}")
-            except Exception:
-                # Last resort - generate a GitHub Actions identifier
-                from datetime import datetime
-                run_id = os.environ.get('GITHUB_RUN_ID', '')
-                if run_id:
-                    current_ip = f"GitHub-{run_id}"
-                else:
-                    current_ip = f"GitHub-{datetime.now().strftime('%Y%m%d%H%M%S')}"
-                custom_print(f"Using GitHub identifier as IP: {current_ip}")
-    except Exception as e:
-        custom_print(f"Error getting fallback IP: {e}", "error")
-        current_ip = f"GitHub-{datetime.now().strftime('%Y%m%d%H%M%S')}"
-
 custom_print(f"Using IP: {current_ip} for scraping")
 
 # First try to connect to the Milk worksheet (for URL sources)
@@ -601,7 +568,7 @@ while len(processed_urls) < len(urls):
                     proxy_manager=proxy_manager,
                     headless=True
                 )
-                wait = WebDriverWait(driver, random.uniform(1, 5))
+                wait = WebDriverWait(driver, random.uniform(8, 12))
                 request_count = 0  # Reset counter
             
             # Load the page directly
@@ -611,7 +578,7 @@ while len(processed_urls) < len(urls):
             # Ultra-minimal wait times for fastest scraping
             if random.random() < 0.05:  # 5% chance of slightly longer wait
                 custom_print("Using minimal extended waiting pattern...")
-                wait_time = random.uniform(0.1, 0.5)
+                wait_time = random.uniform(0.5, 0.8)
                 add_random_delays(wait_time, wait_time + 0.2)
             else:
                 add_random_delays(0.1, 0.3)  # Extremely short delays
@@ -622,7 +589,7 @@ while len(processed_urls) < len(urls):
                 simulate_random_mouse_movements(driver, num_movements=num_movements)
             
             # Ultra-minimal wait for initial content to load
-            wait_time = random.uniform(0.3, 0.5)  # Ultra-short wait
+            wait_time = random.uniform(0.3, 0.8)  # Ultra-short wait
             custom_print(f"Waiting {wait_time:.1f} seconds for content to load...")
             time.sleep(wait_time)
             
@@ -655,7 +622,7 @@ while len(processed_urls) < len(urls):
                     proxy_manager=proxy_manager,
                     headless=True
                 )
-                wait = WebDriverWait(driver, random.uniform(1, 5))
+                wait = WebDriverWait(driver, random.uniform(8, 12))
             elif retry_count >= max_retries:
                 custom_print("Maximum retry attempts reached. Continuing with direct connection.", "warning")
                 
@@ -664,7 +631,7 @@ while len(processed_urls) < len(urls):
                     custom_print("Attempting with direct connection (no proxy)...", "warning")
                     driver.quit()
                     driver = create_stealth_driver(use_proxy=False, headless=True)
-                    wait = WebDriverWait(driver, random.uniform(1, 5))
+                    wait = WebDriverWait(driver, random.uniform(8, 12))
                     
                 # Try one last time with direct connection
                 try:
@@ -1208,7 +1175,7 @@ while len(processed_urls) < len(urls):
     
     # Add random delay after scrolling completes (more human-like)
     custom_print("Adding random delay after scrolling to appear more natural...")
-    add_random_delays(1.0, 3.0)
+    add_random_delays(2.0, 5.0)
 
     # Safety catch in case end-of-results text wasn't found
     if not element_found:
@@ -1279,17 +1246,17 @@ while len(processed_urls) < len(urls):
                         proxy_manager=proxy_manager,
                         headless=True
                     )
-                    wait = WebDriverWait(driver, random.uniform(1, 5))
+                    wait = WebDriverWait(driver, random.uniform(8, 12))
                     
                     # Try to reload current URL
                     driver.get(url)
-                    time.sleep(random.uniform(1, 3))
+                    time.sleep(random.uniform(5, 8))
                     
                     # Skip current ad group and continue with next URL
                     break
                 else:
                     custom_print("No proxy manager available. Taking a long pause before continuing...", "warning")
-                    time.sleep(random.uniform(1, 5))  # Long pause to avoid being blocked
+                    time.sleep(random.uniform(30, 60))  # Long pause to avoid being blocked
             
             # Process ad normally if no security check detected
             custom_print(f"Processing ad group {i}...")
