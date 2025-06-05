@@ -267,7 +267,7 @@ if current_ip == "Unknown IP" or not current_ip:
         import requests
         # Try ipify first (most reliable)
         try:
-            response = requests.get("https://api.ipify.org", timeout=5)
+            response = requests.get("https://api.ipify.org", timeout=10)
             if response.status_code == 200:
                 current_ip = response.text.strip()
                 custom_print(f"Got fallback IP from ipify: {current_ip}")
