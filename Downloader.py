@@ -1,9 +1,11 @@
+#!/usr/bin/env python3
+# Downloader.py
+
 import os
 import re
 import time
 import logging
 import requests
-import os
 import sys
 from datetime import datetime
 import gspread
@@ -12,6 +14,26 @@ from google.auth.exceptions import GoogleAuthError
 from urllib.parse import unquote, urlparse
 import mimetypes
 import uuid
+import dropbox
+from dropbox.exceptions import ApiError, AuthError
+from io import BytesIO
+from dotenv import load_dotenv
+
+def log_message(message, level="info"):
+    """Log messages to both console and log file"""
+    if level.lower() == "info":
+        logging.info(message)
+    elif level.lower() == "warning":
+        logging.warning(message)
+    elif level.lower() == "error":
+        logging.error(message)
+    elif level.lower() == "debug":
+        logging.debug(message)
+    else:
+        logging.info(message)
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Set up logging
 log_dir = "logs"
@@ -27,26 +49,67 @@ logging.basicConfig(
     ]
 )
 
-# Base directory for saving media
-BASE_DIR = "D:\\vid_img"
+# Dropbox configuration
+DROPBOX_ACCESS_TOKEN = os.getenv('DROPBOX_ACCESS_TOKEN')
+if not DROPBOX_ACCESS_TOKEN:
+    raise ValueError("DROPBOX_ACCESS_TOKEN not found in environment variables. Please set it in your .env file")
 
-# Ensure base directory exists
-os.makedirs(BASE_DIR, exist_ok=True)
+# Remove any quotes or whitespace from the token
+DROPBOX_ACCESS_TOKEN = DROPBOX_ACCESS_TOKEN.strip('"\'').strip()
 
-def log_message(message, level="info"):
-    """Log messages to both console and log file"""
-    if level.lower() == "info":
-        logging.info(message)
-    elif level.lower() == "warning":
-        logging.warning(message)
-    elif level.lower() == "error":
-        logging.error(message)
-    elif level.lower() == "debug":
-        logging.debug(message)
-    else:
-        logging.info(message)
+DROPBOX_BASE_PATH = '/Swipe file automation'  # Base path in Dropbox
 
-def setup_google_sheets(sheet_name="Master Auto Swipe - Test ankur", worksheet_name="Ads Details", credentials_path="credentials.json"):
+# Initialize Dropbox client
+try:
+    log_message("Attempting to connect to Dropbox...")
+    dbx = dropbox.Dropbox(DROPBOX_ACCESS_TOKEN)
+    # Test the connection
+    account = dbx.users_get_current_account()
+    log_message(f"Successfully connected to Dropbox as {account.name.display_name}")
+except Exception as e:
+    log_message(f"Error connecting to Dropbox: {str(e)}", "error")
+    log_message("Please check your DROPBOX_ACCESS_TOKEN in the .env file", "error")
+    sys.exit(1)
+
+def file_exists_in_dropbox(path):
+    """Check if a file exists in Dropbox"""
+    try:
+        dbx.files_get_metadata(path)
+        return True
+    except dropbox.exceptions.ApiError as e:
+        # If the error is a "not_found" error, the file doesn't exist
+        if isinstance(e.error, dropbox.files.GetMetadataError) and e.error.is_path() and e.error.get_path().is_not_found():
+            return False
+        # For other API errors, log and assume file doesn't exist to be safe
+        log_message(f"Error checking if file exists: {e}", "error")
+        return False
+
+def folder_exists_in_dropbox(path):
+    """Check if a folder exists in Dropbox"""
+    try:
+        metadata = dbx.files_get_metadata(path)
+        return True
+    except dropbox.exceptions.ApiError as e:
+        # If the error is a "not_found" error, the folder doesn't exist
+        if isinstance(e.error, dropbox.files.GetMetadataError) and e.error.is_path() and e.error.get_path().is_not_found():
+            return False
+        # For other API errors, log and assume folder doesn't exist to be safe
+        log_message(f"Error checking if folder exists: {e}", "error")
+        return False
+
+def create_folder_if_not_exists(path):
+    """Create a folder in Dropbox if it doesn't exist"""
+    if not folder_exists_in_dropbox(path):
+        try:
+            dbx.files_create_folder_v2(path)
+            log_message(f"Created folder: {path}")
+            return True
+        except Exception as e:
+            log_message(f"Error creating folder {path}: {e}", "error")
+            return False
+    return True
+
+def setup_google_sheets(sheet_name="Master Auto Swipe - Test ankur", worksheet_name="Transcript", credentials_path="credentials.json"):
     """Connect to Google Sheets and return the specified worksheet"""
     try:
         # Scopes required for Google Sheets
@@ -63,7 +126,7 @@ def setup_google_sheets(sheet_name="Master Auto Swipe - Test ankur", worksheet_n
         log_message(f"Opening worksheet: {worksheet_name}")
         worksheet = spreadsheet.worksheet(worksheet_name)
         
-        return worksheet
+        return worksheet, spreadsheet
     except GoogleAuthError as e:
         log_message(f"Google authentication error: {e}", "error")
         raise
@@ -88,8 +151,8 @@ def get_file_extension(url, content_type=None):
         if guess_ext:
             return guess_ext
     
-    # Default based on URL pattern
-    if "video" in url:
+    # Default based on URL pattern or type
+    if is_video_url(url):
         return ".mp4"
     else:
         return ".jpg"
@@ -99,21 +162,32 @@ def is_video_url(url):
     video_patterns = ["video", ".mp4", ".mov", ".avi"]
     return any(pattern in url.lower() for pattern in video_patterns)
 
-def download_media(url, save_path):
-    """Download media from URL to specified path in original quality"""
+def get_media_type(url, media_type_value=None):
+    """Determine if media is video or image based on URL and/or media_type column"""
+    # If media_type_value is provided and valid, use it
+    if media_type_value:
+        media_type_lower = media_type_value.lower().strip()
+        if media_type_lower in ["video", "image"]:
+            return media_type_lower
+    
+    # Otherwise determine from URL
+    if is_video_url(url):
+        return "video"
+    else:
+        return "image"
+
+def download_media(url, dropbox_path):
+    """Download media from URL and upload to Dropbox"""
     try:
-        # Check if file already exists
-        if os.path.exists(save_path):
-            file_size = os.path.getsize(save_path) / (1024 * 1024)  # Convert to MB
-            log_message(f"File already exists ({file_size:.2f} MB) at: {save_path}. Skipping download.")
+        # First check if file already exists in Dropbox
+        if file_exists_in_dropbox(dropbox_path):
+            log_message(f"File already exists in Dropbox: {dropbox_path}, skipping download")
             return True
+            
+        log_message(f"Uploading file to Dropbox: {dropbox_path}")
         
         # For Facebook CDN, we'll use the original URL without modification
-        # as modifying their URLs can trigger security measures
         original_quality_url = url
-        
-        # For non-Facebook URLs, we might try to improve quality if needed in the future
-        # But for now, we'll use the original URL to avoid 403 errors
         
         log_message(f"Downloading original quality from: {original_quality_url}")
         
@@ -128,41 +202,57 @@ def download_media(url, save_path):
         
         # Add specific headers for Facebook CDN to avoid 403 errors
         if 'fbcdn.net' in original_quality_url or 'facebook.com' in original_quality_url:
-            # Add referer that matches Facebook domain
             headers["Referer"] = "https://www.facebook.com/"
             headers["Origin"] = "https://www.facebook.com"
-            # Set cookies that might help with access
             headers["Cookie"] = "presence=C%7B%22t3%22%3A%5B%5D%2C%22utc3%22%3A1653862286005%2C%22v%22%3A1%7D"
         
         # Add special headers for video content
         if is_video_url(original_quality_url):
             headers["Range"] = "bytes=0-"  # Request the full video
         
-        # Request the file with a session to handle cookies and redirects
+        # Download the file to memory
         session = requests.Session()
-        response = session.get(original_quality_url, headers=headers, stream=True, timeout=60)  # Longer timeout for videos
+        response = session.get(original_quality_url, headers=headers, stream=True, timeout=60)
         response.raise_for_status()
         
         # Get content type for extension if needed
         content_type = response.headers.get('Content-Type')
         
-        # Ensure directory exists
-        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        # Upload to Dropbox in chunks
+        CHUNK_SIZE = 4 * 1024 * 1024  # 4MB chunks for large files
         
-        # Save file
-        with open(save_path, 'wb') as f:
-            for chunk in response.iter_content(chunk_size=8192):
+        if int(response.headers.get('content-length', 0)) > CHUNK_SIZE:
+            # Large file, use upload session
+            upload_session = dbx.files_upload_session_start(b"")
+            cursor = dropbox.files.UploadSessionCursor(session_id=upload_session.session_id, offset=0)
+            commit = dropbox.files.CommitInfo(path=dropbox_path, mode=dropbox.files.WriteMode('add'))
+            
+            for chunk in response.iter_content(chunk_size=CHUNK_SIZE):
                 if chunk:
-                    f.write(chunk)
+                    dbx.files_upload_session_append_v2(chunk, cursor)
+                    cursor.offset += len(chunk)
+            
+            dbx.files_upload_session_finish(b"", cursor, commit)
+        else:
+            # Small file, direct upload
+            dbx.files_upload(response.content, dropbox_path, mode=dropbox.files.WriteMode('add'))
         
-        file_size = os.path.getsize(save_path) / (1024 * 1024)  # Convert to MB
-        log_message(f"Downloaded original quality ({file_size:.2f} MB) to: {save_path}")
+        file_size = int(response.headers.get('content-length', 0)) / (1024 * 1024)  # Convert to MB
+        log_message(f"Uploaded to Dropbox ({file_size:.2f} MB) at: {dropbox_path}")
         return True
+        
     except requests.exceptions.RequestException as e:
         log_message(f"Error downloading media: {e}", "error")
         return False
+    except dropbox.exceptions.ApiError as e:
+        if isinstance(e.error, dropbox.files.UploadError) and e.error.is_path() and e.error.get_path().is_conflict():
+            # This is a conflict error which means file already exists
+            log_message(f"File already exists (caught during upload): {dropbox_path}")
+            return True
+        log_message(f"Dropbox API error: {e}", "error")
+        return False
     except Exception as e:
-        log_message(f"Unexpected error during download: {e}", "error")
+        log_message(f"Unexpected error during download/upload: {e}", "error")
         return False
 
 def sanitize_filename(filename):
@@ -196,77 +286,81 @@ def update_progress_percentage(current, total):
         # This ensures the progress is visible in GitHub Actions logs
         sys.stdout.flush()
 
-def process_sheet_data():
-    """Main function to process sheet data and download media"""
+def process_worksheet(worksheet_name):
+    """Process a specific worksheet and download media"""
     try:
-        log_message("Starting media download process")
+        log_message(f"Starting media download process for worksheet: {worksheet_name}")
         
         # Connect to Google Sheets
-        worksheet = setup_google_sheets()
+        worksheet, spreadsheet = setup_google_sheets(worksheet_name=worksheet_name)
         
         # Get all values from the worksheet
         all_data = worksheet.get_all_values()
         
         if not all_data:
-            log_message("No data found in the worksheet", "warning")
-            return
+            log_message(f"No data found in the {worksheet_name} worksheet", "warning")
+            return 0, 0, 0
         
         # Get headers
         headers = all_data[0]
         
         # Find required column indices
-        # Note: Look for columns with exact names including trailing spaces based on memory
         media_url_idx = None
         page_name_idx = None
         update_time_idx = None
         library_id_idx = None
         ads_count_idx = None
+        media_type_idx = None
         
         for idx, header in enumerate(headers):
-            if header == "media_url":
+            header_lower = header.lower().strip()
+            if header_lower == "media_url":
                 media_url_idx = idx
-            elif header == "Page " or header.strip() == "Page":
+            elif header_lower in ["page", "name of page"]:
                 page_name_idx = idx
-            elif header == "Last Update Time":
+            elif header_lower == "last update time":
                 update_time_idx = idx
-            elif header == "Name of page":
-                page_name_idx = idx
-            elif header == "library_id":
+            elif header_lower == "library_id":
                 library_id_idx = idx
-            # Check for ad count column
-            elif header == "ads_count" or header.strip() == "ads_count":
+            elif header_lower in ["ads_count", "no. of ads"]:
                 ads_count_idx = idx
+            elif header_lower in ["media_type", "type"]:
+                media_type_idx = idx
         
         if media_url_idx is None:
-            log_message("'media_url' column not found in the worksheet", "error")
-            return
+            log_message(f"'media_url' column not found in the {worksheet_name} worksheet", "error")
+            return 0, 0, 0
         
         if page_name_idx is None:
-            log_message("'Page' or 'Name of page' column not found in the worksheet", "error")
-            return
+            log_message(f"'Page' or 'Name of page' column not found in the {worksheet_name} worksheet", "error")
+            return 0, 0, 0
         
         if update_time_idx is None:
-            log_message("'Last Update Time' column not found in the worksheet", "error")
-            return
+            log_message(f"'Last Update Time' column not found in the {worksheet_name} worksheet", "error")
+            return 0, 0, 0
             
         if library_id_idx is None:
-            log_message("Warning: 'library_id' column not found in the worksheet. Using random filenames instead.", "warning")
+            log_message(f"Warning: 'library_id' column not found in the {worksheet_name} worksheet. Using random filenames instead.", "warning")
             
         if ads_count_idx is None:
-            log_message("Warning: 'ads_count' column not found in the worksheet. Processing all rows regardless of ad count.", "warning")
+            log_message(f"Warning: 'ads_count' column not found in the {worksheet_name} worksheet. Processing all rows regardless of ad count.", "warning")
         
         # Process each row (skip header row)
         total_rows = len(all_data) - 1
         successful_downloads = 0
         processed_rows = 0
+        skipped_files = 0
         
         # Initialize progress tracking
         update_progress_percentage(processed_rows, total_rows)
         
+        # Track which folders we've already checked/created
+        checked_folders = {}
+        
         for row_idx, row in enumerate(all_data[1:], 1):
             try:
                 if row_idx % 10 == 0 or row_idx == 1:
-                    log_message(f"Processing row {row_idx}/{total_rows}")
+                    log_message(f"Processing row {row_idx}/{total_rows} from {worksheet_name}")
                     # Also update progress for GitHub Actions
                     update_progress_percentage(processed_rows, total_rows)
                 
@@ -280,32 +374,58 @@ def process_sheet_data():
                 if library_id_idx is not None and library_id_idx < len(row):
                     library_id = row[library_id_idx].strip()
                 
+                # Get media_type if available
+                media_type_value = None
+                if media_type_idx is not None and media_type_idx < len(row):
+                    media_type_value = row[media_type_idx].strip()
+                
                 # Check ads_count
                 ads_count = 0
                 if ads_count_idx is not None and ads_count_idx < len(row):
                     try:
                         ads_count_str = row[ads_count_idx].strip()
-                        if ads_count_str and ads_count_str.replace('.', '', 1).isdigit():  # Handle decimal numbers
-                            ads_count = float(ads_count_str)
+                        # Extract only digits if there's text
+                        digits_only = re.sub(r'[^0-9]', '', str(ads_count_str))
+                        if digits_only:
+                            ads_count = int(digits_only)
                     except (ValueError, TypeError):
                         pass
                 
-                # Skip if ad count is less than 2
-                if ads_count < 0:
-                    log_message(f"Skipping row {row_idx}: ads_count ({ads_count}) is less than 2")
+                # For Winning Creative Image worksheet, only process rows with ads_count > 10
+                if worksheet_name == "Winning Creative Image" and ads_count <= 10:
+                    log_message(f"Skipping row {row_idx} from {worksheet_name}: ads_count ({ads_count}) is less than or equal to 10")
+                    processed_rows += 1
                     continue
                 
                 # Skip if any required field is missing
                 if not media_url:
-                    log_message(f"Missing media URL in row {row_idx}, skipping", "warning")
+                    log_message(f"Missing media URL in row {row_idx} from {worksheet_name}, skipping", "warning")
+                    processed_rows += 1
                     continue
                     
                 if not page_name:
-                    log_message(f"Missing page name in row {row_idx}, skipping", "warning")
+                    log_message(f"Missing page name in row {row_idx} from {worksheet_name}, skipping", "warning")
+                    processed_rows += 1
                     continue
                     
                 if not update_time:
-                    log_message(f"Missing update time in row {row_idx}, skipping", "warning")
+                    log_message(f"Missing update time in row {row_idx} from {worksheet_name}, skipping", "warning")
+                    processed_rows += 1
+                    continue
+                
+                # Determine media type (video or image)
+                media_type = get_media_type(media_url, media_type_value)
+                
+                # For Transcript worksheet, only process videos
+                if worksheet_name == "Transcript" and media_type != "video":
+                    log_message(f"Skipping non-video media in Transcript worksheet: {media_url}", "info")
+                    processed_rows += 1
+                    continue
+                
+                # For Winning Creative Image worksheet, only process images
+                if worksheet_name == "Winning Creative Image" and media_type != "image":
+                    log_message(f"Skipping non-image media in Winning Creative Image worksheet: {media_url}", "info")
+                    processed_rows += 1
                     continue
                 
                 # Sanitize names for safe folder creation
@@ -340,28 +460,57 @@ def process_sheet_data():
                 
                 safe_update_date = sanitize_filename(date_part)
                 
-                # Create folder structure
-                # Format: D:\vid_img\[Page Name]\clone\[Last Update Date]\[media file]
-                folder_path = os.path.join(BASE_DIR, safe_page_name, "clone", safe_update_date)
-                
-                # Determine file extension based on URL
+                # Create Dropbox path structure: name -> date -> image/video
                 file_ext = get_file_extension(media_url)
                 
                 # Generate filename using library_id if available, otherwise use random ID
                 if library_id:
-                    # Sanitize library_id for use as filename
                     safe_library_id = sanitize_filename(library_id)
                     file_name = f"{safe_library_id}{file_ext}"
                 else:
-                    file_name = f"No library id found"
+                    file_name = f"{uuid.uuid4().hex}{file_ext}"  # Use random UUID if no library_id
                 
-                # Full save path
-                save_path = os.path.join(folder_path, file_name)
+                # Create folder structure: base/page_name/date/media_type
+                page_folder_path = f"{DROPBOX_BASE_PATH}/{safe_page_name}"
+                date_folder_path = f"{page_folder_path}/{safe_update_date}"
+                media_type_folder_path = f"{date_folder_path}/{media_type}"
                 
-                # Download the media
-                if download_media(media_url, save_path):
+                # Check and create folders if needed
+                folder_key = f"{safe_page_name}:{safe_update_date}:{media_type}"
+                
+                if folder_key not in checked_folders:
+                    # Create each folder in the path if it doesn't exist
+                    if not create_folder_if_not_exists(page_folder_path):
+                        log_message(f"Failed to create page folder: {page_folder_path}", "error")
+                        processed_rows += 1
+                        continue
+                        
+                    if not create_folder_if_not_exists(date_folder_path):
+                        log_message(f"Failed to create date folder: {date_folder_path}", "error")
+                        processed_rows += 1
+                        continue
+                        
+                    if not create_folder_if_not_exists(media_type_folder_path):
+                        log_message(f"Failed to create media type folder: {media_type_folder_path}", "error")
+                        processed_rows += 1
+                        continue
+                        
+                    checked_folders[folder_key] = True
+                
+                # Construct full Dropbox path
+                dropbox_path = f"{media_type_folder_path}/{file_name}"
+                
+                # Check if file already exists
+                if file_exists_in_dropbox(dropbox_path):
+                    log_message(f"File already exists: {dropbox_path}, skipping")
+                    skipped_files += 1
+                    processed_rows += 1
+                    continue
+                
+                # Download and upload the media to Dropbox
+                if download_media(media_url, dropbox_path):
                     successful_downloads += 1
-                    log_message(f"Successfully downloaded media for {page_name}")
+                    log_message(f"Successfully downloaded {media_type} for {page_name}")
                     
                 # Add a small delay to avoid overloading servers
                 time.sleep(0.5)
@@ -371,12 +520,40 @@ def process_sheet_data():
                 update_progress_percentage(processed_rows, total_rows)
                 
             except Exception as e:
-                log_message(f"Error processing row {row_idx}: {e}", "error")
+                log_message(f"Error processing row {row_idx} from {worksheet_name}: {e}", "error")
                 # Update progress even for failed items
                 processed_rows += 1
                 update_progress_percentage(processed_rows, total_rows)
         
-        log_message(f"Process complete. Successfully downloaded {successful_downloads} out of {total_rows} media files.")
+        return successful_downloads, skipped_files, total_rows
+        
+    except Exception as e:
+        log_message(f"Error processing {worksheet_name} worksheet: {e}", "error")
+        return 0, 0, 0
+
+def process_sheet_data():
+    """Main function to process both worksheets and download media"""
+    try:
+        log_message("Starting media download process")
+        
+        # Process Transcript worksheet (for videos)
+        log_message("Processing Transcript worksheet for videos...")
+        video_downloads, video_skipped, video_total = process_worksheet("Transcript")
+        
+        # Process Winning Creative Image worksheet (for images)
+        log_message("Processing Winning Creative Image worksheet for images...")
+        image_downloads, image_skipped, image_total = process_worksheet("Winning Creative Image")
+        
+        # Summarize results
+        total_downloads = video_downloads + image_downloads
+        total_skipped = video_skipped + image_skipped
+        total_processed = video_total + image_total
+        
+        log_message(f"Process complete. Results summary:")
+        log_message(f"- Videos: Downloaded {video_downloads} out of {video_total} from Transcript worksheet")
+        log_message(f"- Images: Downloaded {image_downloads} out of {image_total} from Winning Creative Image worksheet")
+        log_message(f"- Total: Successfully downloaded {total_downloads} out of {total_processed} media files")
+        log_message(f"- Skipped {total_skipped} files because they already existed in Dropbox")
         
     except Exception as e:
         log_message(f"Error in media download process: {e}", "error")
