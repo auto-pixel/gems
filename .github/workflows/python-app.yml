@@ -111,13 +111,7 @@ jobs:
           print(f'Saved {len(proxies)} unique proxies to proxies.txt')
           "
       
-      - name: Install ffmpeg
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg
-          # Verify installation
-          ffmpeg -version
-          
+
       - name: Run master script
         run: python master_script.py
       
