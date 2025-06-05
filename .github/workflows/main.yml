@@ -99,6 +99,10 @@ jobs:
         if: always()
         run: python Claude_ai.py
 
+      - name: Run post-processing script
+        if: always()
+        run: python Winning_creative.py
+
       - name: Upload results
         uses: actions/upload-artifact@v4
         with:
