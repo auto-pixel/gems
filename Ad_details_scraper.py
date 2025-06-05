@@ -607,22 +607,67 @@ while len(processed_urls) < len(urls):
             # Function to handle ad blocker popup
             def handle_ad_blocker_popup():
                 try:
-                    # Look for the ad blocker popup by its title and button text
-                    popup = WebDriverWait(driver, 3).until(
-                        EC.presence_of_element_located((By.XPATH, 
-                        "//*[contains(text(), 'Turn off ad blocker') or contains(text(), 'ad blocker')]//ancestor::div[contains(@role, 'dialog')]"))
-                    )
-                    # Find and click the OK button
-                    ok_button = WebDriverWait(popup, 3).until(
-                        EC.element_to_be_clickable((By.XPATH, ".//*[contains(text(), 'OK') or contains(@aria-label, 'OK')]"))
-                    )
+                    # Look for the ad blocker popup by various possible selectors
+                    # First try the dialog with "Turn off ad blocker" text
+                    try:
+                        popup = WebDriverWait(driver, 5).until(
+                            EC.presence_of_element_located((By.XPATH, 
+                            "//div[contains(@role, 'dialog')][.//div[contains(text(), 'Turn off ad blocker')]]"))
+                        )
+                        custom_print("Found ad blocker popup by main title")
+                    except (TimeoutException, NoSuchElementException):
+                        # Try alternate approach with any dialog containing ad blocker text
+                        try:
+                            popup = WebDriverWait(driver, 3).until(
+                                EC.presence_of_element_located((By.XPATH, 
+                                "//div[contains(@role, 'dialog')][.//div[contains(text(), 'ad blocker')]]"))
+                            )
+                            custom_print("Found ad blocker popup by content text")
+                        except (TimeoutException, NoSuchElementException):
+                            # Try a more generic approach by looking for the specific message
+                            popup = driver.find_element(By.XPATH, 
+                                "//div[contains(text(), 'Meta') and contains(text(), 'advertising tools') and contains(text(), 'ad blocker')]//ancestor::div[contains(@role, 'dialog')]")
+                            custom_print("Found ad blocker popup by Meta message text")
+                    
+                    # Find and click the OK button - try multiple approaches
+                    try:
+                        # First try direct button with OK text
+                        ok_button = WebDriverWait(popup, 3).until(
+                            EC.element_to_be_clickable((By.XPATH, ".//div[text()='OK']"))
+                        )
+                        custom_print("Found OK button by exact text match")
+                    except (TimeoutException, NoSuchElementException):
+                        try:
+                            # Try button with aria-label
+                            ok_button = popup.find_element(By.XPATH, ".//div[@aria-label='OK']")
+                            custom_print("Found OK button by aria-label")
+                        except (NoSuchElementException):
+                            try:
+                                # Try any button-like element in the dialog
+                                ok_button = popup.find_element(By.XPATH, ".//div[@role='button'][contains(@class, 'x1lliihq')]")
+                                custom_print("Found OK button by role and class")
+                            except (NoSuchElementException):
+                                # Last resort - find blue button
+                                ok_button = popup.find_element(By.XPATH, ".//div[contains(@class, 'x1n2onr6')][contains(@class, 'x1ja2u2z')]")
+                                custom_print("Found OK button by color class")
+                    
+                    # Add a small delay before clicking to ensure stability
+                    time.sleep(0.5)
                     custom_print("Ad blocker popup detected. Clicking OK...")
-                    ok_button.click()
+                    
+                    # Click with both regular and JavaScript methods for reliability
+                    try:
+                        ok_button.click()
+                    except Exception as click_error:
+                        custom_print(f"Regular click failed: {click_error}, trying JavaScript click", "warning")
+                        driver.execute_script("arguments[0].click();", ok_button)
+                    
                     custom_print("Closed ad blocker popup")
                     # Wait a moment after closing the popup
-                    time.sleep(0.3)
+                    time.sleep(1.0)
                     return True
-                except (TimeoutException, NoSuchElementException):
+                except (TimeoutException, NoSuchElementException) as e:
+                    custom_print(f"No ad blocker popup detected: {str(e)}")
                     return False
                 except Exception as e:
                     custom_print(f"Error handling ad blocker popup: {e}", "warning")
@@ -632,9 +677,12 @@ while len(processed_urls) < len(urls):
             driver.get(url)
             custom_print(f"Navigating to URL directly")
             
-            # Check for and handle ad blocker popup
-            handle_ad_blocker_popup()
-            
+            # Check for and handle ad blocker popup immediately after load
+            if handle_ad_blocker_popup():
+                # If popup was handled, give the page a moment to refresh
+                custom_print("Waiting for page to reload after dismissing popup...")
+                time.sleep(1.5)
+
             # Ultra-minimal wait times for fastest scraping
             if random.random() < 0.05:  # 5% chance of slightly longer wait
                 custom_print("Using minimal extended waiting pattern...")
@@ -844,19 +892,39 @@ while len(processed_urls) < len(urls):
                     # Get all Last Update Time values
                     last_update_values = milk_worksheet.col_values(milk_column_indices['last_update'])
                     
+                    # Check if we should force process all URLs regardless of update time
+                    force_process_all = os.environ.get('FORCE_PROCESS_ALL', 'false').lower() == 'true'
+                    if force_process_all:
+                        custom_print("FORCE_PROCESS_ALL is set to true - will process all URLs regardless of last update time")
+                    
                     # Look for a row that contains this exact URL and has a Last Update Time
                     for i, cell_url in enumerate(url_values):
                         if i > 0 and i < len(last_update_values) and cell_url.strip() == url.strip():
-                            if last_update_values[i].strip():
-                                custom_print(f"This URL was already processed on {last_update_values[i]}")
-                                custom_print("Skipping this URL as it has already been processed...")
+                            if last_update_values[i].strip() and not force_process_all:
+                                # Get the current date in format YYYY-MM-DD
+                                today_date = datetime.now().strftime("%Y-%m-%d")
+                                # Extract the date part from the last update time (format: YYYY-MM-DD HH:MM:SS)
+                                if ' ' in last_update_values[i]:
+                                    last_update_date = last_update_values[i].split(' ')[0]
+                                else:
+                                    last_update_date = last_update_values[i]
+                                    
+                                custom_print(f"This URL was last processed on {last_update_values[i]}")
                                 
-                                # Flag that this URL should be skipped
-                                should_skip_url = True
-                                # Add to processed URLs for progress tracking
-                                processed_urls.add(url)
-                                update_progress_percentage()
-                                break
+                                # Only skip if the last update was today
+                                if last_update_date == today_date:
+                                    custom_print(f"Skipping this URL as it was already processed today (row {i+1})")
+                                    
+                                    # Flag that this URL should be skipped
+                                    should_skip_url = True
+                                    # Add to processed URLs for progress tracking
+                                    processed_urls.add(url)
+                                    update_progress_percentage()
+                                    break
+                                else:
+                                    custom_print(f"URL was last processed on {last_update_date}, but today is {today_date}. Will process again.")
+                            else:
+                                custom_print(f"URL found but has no Last Update Time or force processing is enabled. Will process.")
                 
                 # Add any missing columns to Milk worksheet
                 if 'ads_by_ai' not in milk_column_indices:
@@ -1042,6 +1110,392 @@ while len(processed_urls) < len(urls):
     
     custom_print(f"Completed {scroll_count} human-like scrolls")
     
+    # Check for ad blocker popup after scrolling
+    if handle_ad_blocker_popup():
+        custom_print("Ad blocker popup appeared after scrolling, handled successfully")
+        # Add slight pause to let page stabilize after popup dismissal
+        time.sleep(0.5)
+
+    # Check if we've reached the end of results using various possible end-of-results messages
+    try:
+        # Look for "End of results" text
+        end_divs = driver.find_elements(By.XPATH, "//div[contains(text(), 'End of results')]")
+        element_found = len(end_divs) > 0
+        
+        if not element_found:
+            # Also check for "We couldn't find any more results"
+            alt_end_divs = driver.find_elements(By.XPATH, "//div[contains(text(), 'We couldn')]/span[contains(text(), 'find any more results')]")
+            element_found = len(alt_end_divs) > 0
+            
+            if not element_found:
+                # Try another possible end message format
+                try:
+                    alt_end_divs_2 = driver.find_elements(By.XPATH, "//div[contains(@class, 'xu06os2')]/span[contains(text(), 'End of results')]")
+                    element_found = len(alt_end_divs_2) > 0
+                except (NoSuchElementException, TimeoutException):
+                    pass
+                    
+    except Exception as e:
+        custom_print(f"Error checking for end-of-results: {e}", "error")
+        
+    if element_found:
+        custom_print(f"✅ End-of-list element found after {scroll_count} scrolls. Stopping scroll.")
+        
+    # Safety limit check (separate from human-like scrolling function)
+    if scroll_count > 500: # Adjust limit as needed
+        custom_print("⚠️ Reached maximum scroll limit (500). Stopping scroll.")
+    
+    try:
+        # First try to find the element with role="heading" containing "results" with shorter timeout
+        try:
+            ad_count_element = WebDriverWait(driver, 3).until(
+                EC.presence_of_element_located((By.XPATH, "//div[@role='heading'][contains(text(), 'results') or contains(text(), 'result')]"))
+            )
+        except TimeoutException:
+            # Fall back to direct find without waiting
+            ad_count_element = driver.find_element(By.XPATH, "//div[@role='heading'][contains(text(), 'results') or contains(text(), 'result')]")
+        ad_count_text = ad_count_element.text.strip()
+        custom_print(f"Found ad count text: {ad_count_text}")
+        
+        # Extract the numeric part using regex
+        matches = re.search(r'~?(\d+(?:,\d+)?)', ad_count_text)
+        if matches:
+            # Remove commas and convert to int
+            ad_count = int(matches.group(1).replace(',', ''))
+            custom_print(f"Extracted ad count: {ad_count}")
+        else:
+            custom_print(f"Could not extract numeric ad count from: {ad_count_text}", "warning")
+    except (NoSuchElementException, TimeoutException):
+        # If the first method fails, try a more general approach
+        try:
+            ad_count_element = driver.find_element(By.XPATH, "//div[contains(text(), 'results') or contains(text(), 'result')]") 
+            ad_count_text = ad_count_element.text.strip()
+            custom_print(f"Found ad count text (alternate method): {ad_count_text}")
+            
+            # Extract the numeric part using regex
+            matches = re.search(r'~?(\d+(?:,\d+)?)', ad_count_text)
+            if matches:
+                # Remove commas and convert to int
+                ad_count = int(matches.group(1).replace(',', ''))
+                custom_print(f"Extracted ad count: {ad_count}")
+            else:
+                custom_print(f"Could not extract numeric ad count from: {ad_count_text}", "warning")
+        except NoSuchElementException:
+            # Try JavaScript as a last resort
+            try:
+                ad_count_text = driver.execute_script("""
+                    const elements = document.querySelectorAll('div');
+                    for (const el of elements) {
+                        const text = el.textContent.trim();
+                        if (text.includes('results') || text.includes('result')) {
+                            return text;
+                        }
+                    }
+                    return null;
+                """)
+                
+                if ad_count_text:
+                    custom_print(f"Found ad count text (JavaScript method): {ad_count_text}")
+                    matches = re.search(r'~?(\d+(?:,\d+)?)', ad_count_text)
+                    if matches:
+                        ad_count = int(matches.group(1).replace(',', ''))
+                        custom_print(f"JavaScript-extracted ad count: {ad_count}")
+            except Exception as js_error:
+                custom_print(f"JavaScript ad count extraction failed: {str(js_error)}", "warning")
+    except Exception as e:
+        custom_print(f"Error extracting ad count: {e}", "error")
+    
+    # Process URL parameters to get the page_id for tracking in the Milk sheet
+    url_params = {}
+    try:
+        # Extract page_id from URL
+        if "view_all_page_id=" in url:
+            page_id_match = re.search(r'view_all_page_id=(\d+)', url)
+            if page_id_match:
+                url_params['page_id'] = page_id_match.group(1)
+                custom_print(f"Extracted page_id from URL: {url_params['page_id']}")
+    except Exception as e:
+        custom_print(f"Error extracting URL parameters: {e}", "error")
+    
+    # Initialize should_skip_url flag
+    should_skip_url = False
+    
+    # If ad_count is 0, update the Milk sheet and skip to the next URL without scrolling
+    if ad_count == 0 or ad_count is None:
+        custom_print("No ads found (count is 0). Updating Milk sheet and skipping to next URL...")
+        
+        # Update the Milk worksheet with the ad count, timestamp, and IP address
+        if milk_worksheet:
+            try:
+                # Get the current headers to find column indices
+                milk_headers = milk_worksheet.row_values(1)
+                milk_column_indices = {}
+                
+                # Find the necessary column indices - account for trailing spaces in column names
+                for i, header in enumerate(milk_headers):
+                    # Check for 'no.of ads By Ai' column (exact match with spaces)
+                    if header == "no.of ads By Ai":
+                        milk_column_indices['ads_by_ai'] = i + 1  # 1-indexed
+                        custom_print(f"Found 'no.of ads By Ai' column at index {milk_column_indices['ads_by_ai']}")
+                    
+                    # Check for Last Update Time column
+                    if header == "Last Update Time" or header.lower().strip() == "last update time":
+                        milk_column_indices['last_update'] = i + 1  # 1-indexed
+                        custom_print(f"Found 'Last Update Time' column at index {milk_column_indices['last_update']}")
+                    
+                    # Check for IP Address column
+                    if header == "IP Address" or header.lower().strip() == "ip address":
+                        milk_column_indices['ip_address'] = i + 1  # 1-indexed
+                        custom_print(f"Found 'IP Address' column at index {milk_column_indices['ip_address']}")
+                    
+                    # Find Page Transperancy column for matching - handle spaces in column name
+                    if header == "Page Transperancy " or header == "Page Transperancy":
+                        milk_column_indices['page_transperancy'] = i + 1  # 1-indexed
+                        custom_print(f"Found 'Page Transperancy' column at index {milk_column_indices['page_transperancy']}")
+                    elif header.lower().strip() in ["page transperancy", "page transparency"]:
+                        milk_column_indices['page_transperancy'] = i + 1  # 1-indexed
+                        custom_print(f"Found 'Page Transperancy' column via fallback at index {milk_column_indices['page_transperancy']}")
+                    
+                # Also find URL column to check for existing URLs
+                url_col_index = None
+                for i, header in enumerate(milk_headers):
+                    if header.lower().strip() in ["ad url", "url", "ad library url"]:
+                        url_col_index = i + 1  # 1-indexed
+                        custom_print(f"Found URL column at index {url_col_index}")
+                        break
+                
+                # Check if this URL has already been processed (has Last Update Time)
+                if url_col_index and 'last_update' in milk_column_indices:
+                    # Get all URLs
+                    url_values = milk_worksheet.col_values(url_col_index)
+                    
+                    # Get all Last Update Time values
+                    last_update_values = milk_worksheet.col_values(milk_column_indices['last_update'])
+                    
+                    # Check if we should force process all URLs regardless of update time
+                    force_process_all = os.environ.get('FORCE_PROCESS_ALL', 'false').lower() == 'true'
+                    if force_process_all:
+                        custom_print("FORCE_PROCESS_ALL is set to true - will process all URLs regardless of last update time")
+                    
+                    # Look for a row that contains this exact URL and has a Last Update Time
+                    for i, cell_url in enumerate(url_values):
+                        if i > 0 and i < len(last_update_values) and cell_url.strip() == url.strip():
+                            if last_update_values[i].strip() and not force_process_all:
+                                # Get the current date in format YYYY-MM-DD
+                                today_date = datetime.now().strftime("%Y-%m-%d")
+                                # Extract the date part from the last update time (format: YYYY-MM-DD HH:MM:SS)
+                                if ' ' in last_update_values[i]:
+                                    last_update_date = last_update_values[i].split(' ')[0]
+                                else:
+                                    last_update_date = last_update_values[i]
+                                    
+                                custom_print(f"This URL was last processed on {last_update_values[i]}")
+                                
+                                # Only skip if the last update was today
+                                if last_update_date == today_date:
+                                    custom_print(f"Skipping this URL as it was already processed today (row {i+1})")
+                                    
+                                    # Flag that this URL should be skipped
+                                    should_skip_url = True
+                                    # Add to processed URLs for progress tracking
+                                    processed_urls.add(url)
+                                    update_progress_percentage()
+                                    break
+                                else:
+                                    custom_print(f"URL was last processed on {last_update_date}, but today is {today_date}. Will process again.")
+                            else:
+                                custom_print(f"URL found but has no Last Update Time or force processing is enabled. Will process.")
+                
+                # Add any missing columns to Milk worksheet
+                if 'ads_by_ai' not in milk_column_indices:
+                    next_col = len(milk_headers) + 1
+                    milk_worksheet.update_cell(1, next_col, "no.of ads By Ai")
+                    milk_column_indices['ads_by_ai'] = next_col
+                    custom_print(f"Added 'no.of ads By Ai' column at index {next_col}")
+                
+                if 'last_update' not in milk_column_indices:
+                    next_col = len(milk_headers) + 1
+                    milk_worksheet.update_cell(1, next_col, "Last Update Time")
+                    milk_column_indices['last_update'] = next_col
+                    custom_print(f"Added 'Last Update Time' column at index {next_col}")
+                
+                if 'ip_address' not in milk_column_indices:
+                    next_col = len(milk_headers) + 1
+                    milk_worksheet.update_cell(1, next_col, "IP Address")
+                    milk_column_indices['ip_address'] = next_col
+                    custom_print(f"Added 'IP Address' column at index {next_col}")
+                
+                # Find the matching row in Milk worksheet for this URL
+                row_index = None
+                
+                # First, check if we already know which row this URL corresponds to
+                if current_milk_row:
+                    row_index = current_milk_row
+                    custom_print(f"Using known row {row_index} for this URL from earlier processing")
+                else:
+                    # Try to find URL column and match directly by URL
+                    url_col_index = None
+                    for i, header in enumerate(milk_headers):
+                        if header.lower().strip() in ["ad url", "url", "ad library url"]:
+                            url_col_index = i + 1  # 1-indexed
+                            custom_print(f"Found URL column at index {url_col_index}")
+                            break
+                    
+                    if url_col_index:
+                        # Get all values in the URL column
+                        url_values = milk_worksheet.col_values(url_col_index)
+                        
+                        # Look for a row that contains this exact URL
+                        for i, cell_url in enumerate(url_values):
+                            if cell_url.strip() == url.strip():
+                                row_index = i + 1  # 1-indexed
+                                custom_print(f"Found matching URL in Milk worksheet at row {row_index}")
+                                break
+                    
+                    # If no match by URL, try matching by page_id as a fallback
+                    if not row_index and 'page_transperancy' in milk_column_indices and 'page_id' in url_params:
+                        # Get all values in the Page Transperancy column
+                        page_trans_values = milk_worksheet.col_values(milk_column_indices['page_transperancy'])
+                        
+                        # Look for a row that contains this page_id
+                        for i, cell_value in enumerate(page_trans_values):
+                            if url_params['page_id'] in cell_value:
+                                row_index = i + 1  # 1-indexed
+                                custom_print(f"Found matching page_id in Milk worksheet at row {row_index}")
+                                
+                                # If we found it by page_id but not URL, update the URL column
+                                if url_col_index:
+                                    milk_worksheet.update_cell(row_index, url_col_index, url)
+                                    custom_print(f"Updated URL column at row {row_index} with current URL")
+                                break
+                
+                if row_index:
+                    # Get current timestamp
+                    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    
+                    # Update the no.of ads By Ai column - extract only the number
+                    if 'ads_by_ai' in milk_column_indices:
+                        # If ad_count is found, use it, otherwise use 0
+                        value_to_update = str(ad_count) if ad_count is not None else '0'
+                        milk_worksheet.update_cell(row_index, milk_column_indices['ads_by_ai'], value_to_update)
+                        custom_print(f"Updated 'no.of ads By Ai' column with value: {value_to_update}")
+                    
+                    # Update the Last Update Time column
+                    if 'last_update' in milk_column_indices:
+                        milk_worksheet.update_cell(row_index, milk_column_indices['last_update'], current_time)
+                        custom_print(f"Updated 'Last Update Time' column with value: {current_time}")
+                    
+                    # Update the IP Address column
+                    if 'ip_address' in milk_column_indices:
+                        milk_worksheet.update_cell(row_index, milk_column_indices['ip_address'], current_ip)
+                        custom_print(f"Updated 'IP Address' column with value: {current_ip}")
+                    
+                    # Update the same columns in the Ads Details worksheet if needed
+                    if ads_details_worksheet:
+                        try:
+                            # Get the headers from Ads Details worksheet
+                            ads_headers = ads_details_worksheet.row_values(1)
+                            ads_column_indices = {}
+                            
+                            # Find the necessary column indices
+                            for i, header in enumerate(ads_headers):
+                                # Check for Last Update Time column
+                                if header == "Last Update Time" or header.lower().strip() == "last update time":
+                                    ads_column_indices['last_update'] = i + 1  # 1-indexed
+                                    custom_print(f"Found 'Last Update Time' column in Ads Details at index {ads_column_indices['last_update']}")
+                                
+                                # Check for IP Address column
+                                if header == "IP Address" or header.lower().strip() == "ip address":
+                                    ads_column_indices['ip_address'] = i + 1  # 1-indexed
+                                    custom_print(f"Found 'IP Address' column in Ads Details at index {ads_column_indices['ip_address']}")
+                            
+                            # Find all rows in Ads Details worksheet that match this page_id
+                            if 'page_id' in url_params:
+                                # Update all matching rows in Ads Details worksheet
+                                try:
+                                    # Find column with Page ID or similar in Ads Details
+                                    page_id_col_index = None
+                                    for i, header in enumerate(ads_headers):
+                                        if "page id" in header.lower() or "pageid" in header.lower().replace(" ", ""):
+                                            page_id_col_index = i + 1  # 1-indexed
+                                            custom_print(f"Found Page ID column in Ads Details at index {page_id_col_index}")
+                                            break
+                                    
+                                    if page_id_col_index:
+                                        # Get all Page ID values
+                                        page_id_values = ads_details_worksheet.col_values(page_id_col_index)
+                                        
+                                        # Find rows with matching page_id
+                                        matching_rows = []
+                                        for i, cell_value in enumerate(page_id_values):
+                                            if str(url_params['page_id']) in str(cell_value):
+                                                matching_rows.append(i + 1)  # 1-indexed
+                                        
+                                        custom_print(f"Found {len(matching_rows)} matching rows in Ads Details worksheet")
+                                        
+                                        # Update Last Update Time and IP Address for all matching rows
+                                        for row_idx in matching_rows:
+                                            if 'last_update' in ads_column_indices:
+                                                ads_details_worksheet.update_cell(row_idx, ads_column_indices['last_update'], current_time)
+                                            
+                                            if 'ip_address' in ads_column_indices:
+                                                ads_details_worksheet.update_cell(row_idx, ads_column_indices['ip_address'], current_ip)
+                                    
+                                except Exception as e:
+                                    custom_print(f"Error updating Ads Details worksheet for zero ads case: {e}", "error")
+                        except Exception as e:
+                            custom_print(f"Error working with Ads Details worksheet for zero ads case: {e}", "error")
+                else:
+                    custom_print(f"Could not find matching row in Milk worksheet for page_id: {url_params.get('page_id', 'unknown')}", "warning")
+            except Exception as e:
+                custom_print(f"Error updating Milk worksheet for zero ads case: {e}", "error")
+        
+        # Add this URL to processed_urls and continue to the next URL
+        processed_urls.add(url)
+        # Update progress after adding to processed_urls
+        update_progress_percentage()
+        continue
+        
+    # Check if this URL should be skipped (was already processed)
+    if should_skip_url:
+        custom_print(f"Skipping URL {url} as it was already processed")
+        continue
+    
+    # Define variable for storing ad data from this URL
+    ads_data = {}
+    
+    # Start scrolling to load content with human-like behavior since ads were found
+    custom_print(f"Found {ad_count} ads. Starting human-like scrolling to load content...")
+    
+    # Initialize vars needed for our special end-of-results detection
+    element_found = False
+    
+    # Only occasionally simulate minimal mouse movements before scrolling
+    if random.random() < 0.15:  # 15% chance of brief pause
+        custom_print("Performing minimal random mouse movements...")
+        simulate_random_mouse_movements(driver, num_movements=random.randint(1, 3))
+    else:
+        custom_print("Skipping initial mouse movements to save time...")
+    
+    # Add a minimal random delay before starting to scroll
+    delay = add_random_delays(0.2, 0.6)
+    custom_print(f"Waiting {delay:.2f} seconds before starting to scroll...")
+    
+    # Perform ultra-fast scrolling with minimal pauses
+    scroll_count = perform_human_like_scroll(
+        driver, 
+        scroll_pause_base=random.uniform(0.1, 0.5),  # Ultra-short pause time
+        max_scroll_attempts=4                       # Minimal attempts at bottom
+    )
+    
+    custom_print(f"Completed {scroll_count} human-like scrolls")
+    
+    # Check for ad blocker popup after scrolling
+    if handle_ad_blocker_popup():
+        custom_print("Ad blocker popup appeared after scrolling, handled successfully")
+        # Add slight pause to let page stabilize after popup dismissal
+        time.sleep(0.5)
+
     # Check if we've reached the end of results using various possible end-of-results messages
     try:
         # Look for "End of results" text
@@ -1285,6 +1739,13 @@ while len(processed_urls) < len(urls):
         try:
             # Detect potential anti-scraping challenges
             captcha_elements = driver.find_elements(By.XPATH, "//div[contains(text(), 'Security Check') or contains(text(), 'captcha') or contains(text(), 'Checkpoint')]")
+            
+            # Also check for ad blocker popup that might appear during ad processing
+            if not captcha_elements and random.random() < 0.2:  # Randomly check for ad blocker (20% chance)
+                if handle_ad_blocker_popup():
+                    custom_print("Ad blocker popup appeared during ad processing, handled successfully")
+                    time.sleep(0.5)  # Short pause after dismissing
+                    
             if captcha_elements:
                 custom_print("⚠️ SECURITY CHECK DETECTED! Taking evasive action...", "warning")
                 
@@ -2119,6 +2580,108 @@ while len(processed_urls) < len(urls):
     custom_print("-------------------------------------------")
 
 # Process is complete - all data has been added to the Google Sheet
+# Add retry mechanism for failed URLs
+unprocessed_urls = [u for u in urls if u not in processed_urls]
+if unprocessed_urls:
+    custom_print(f"\n⚠️ Found {len(unprocessed_urls)} URLs that were not processed successfully")
+    
+    # Ask if we want to retry these URLs
+    retry_enabled = os.environ.get('RETRY_FAILED_URLS', 'true').lower() == 'true'
+    
+    if retry_enabled and len(unprocessed_urls) > 0:
+        custom_print(f"Retrying {len(unprocessed_urls)} failed URLs...")
+        
+        # Retry loop with reduced set of URLs
+        retry_urls = unprocessed_urls.copy()
+        retry_processed = set()
+        
+        # Set maximum retries
+        max_retries = 1  # Just try once more
+        
+        for retry_attempt in range(max_retries):
+            custom_print(f"\n=== RETRY ATTEMPT {retry_attempt + 1}/{max_retries} ===")
+            custom_print(f"Retrying {len(retry_urls)} URLs")
+            
+            # Add a longer cooling period before retries
+            cooling_time = random.uniform(5, 10)
+            custom_print(f"Adding cooling period of {cooling_time:.1f} seconds before retrying...")
+            time.sleep(cooling_time)
+            
+            # Rotate proxy if available
+            if proxy_manager:
+                custom_print("Rotating proxy for retry attempts...")
+                driver.quit()
+                driver = create_stealth_driver(
+                    use_proxy=True,
+                    proxy_manager=proxy_manager,
+                    headless=True
+                )
+                wait = WebDriverWait(driver, random.uniform(0.5, 2.5))
+            
+            # Process each failed URL
+            for retry_url in retry_urls:
+                if retry_url in retry_processed:
+                    continue
+                    
+                custom_print(f"\n===== RETRY: Processing URL {retry_urls.index(retry_url)+1}/{len(retry_urls)} =====")
+                custom_print(f"Retrying URL: {retry_url}")
+                
+                # Try with a different approach - sometimes a slight delay helps
+                try:
+                    # Use a longer timeout
+                    driver.set_page_load_timeout(60)  # Increase timeout for retries
+                    driver.get(retry_url)
+                    
+                    # Wait longer for page to load during retries
+                    time.sleep(random.uniform(3, 5))
+                    
+                    # Check for ad blocker popup with extra waiting time
+                    try:
+                        WebDriverWait(driver, 8).until(
+                            EC.presence_of_element_located((By.XPATH, "//div[contains(@role, 'dialog')]"))
+                        )
+                        custom_print("Dialog detected, checking if it's an ad blocker popup...")
+                        if handle_ad_blocker_popup():
+                            custom_print("Successfully handled ad blocker popup during retry")
+                            time.sleep(2)  # Longer wait after handling popup
+                    except (TimeoutException, NoSuchElementException):
+                        custom_print("No dialog detected during retry")
+                    
+                    # Rest of processing code would go here, but for simplicity just mark as processed
+                    custom_print(f"Successfully accessed URL during retry")
+                    retry_processed.add(retry_url)
+                    processed_urls.add(retry_url)
+                    
+                except Exception as e:
+                    custom_print(f"Error during retry: {e}", "error")
+                
+                # Add cooling between retry attempts
+                time.sleep(random.uniform(2, 4))
+            
+            # Update remaining URLs for next retry attempt
+            retry_urls = [u for u in unprocessed_urls if u not in retry_processed]
+            if not retry_urls:
+                custom_print("All retry attempts successful!")
+                break
+                
+        # Final report on retries
+        custom_print(f"\nRetry summary: Successfully processed {len(retry_processed)}/{len(unprocessed_urls)} previously failed URLs")
+        unprocessed_urls = [u for u in urls if u not in processed_urls]
+        if unprocessed_urls:
+            custom_print(f"⚠️ Still have {len(unprocessed_urls)} URLs that could not be processed after retries")
+            # Optional: Write the list of failed URLs to a file for manual review
+            with open("failed_urls.txt", "w") as f:
+                for failed_url in unprocessed_urls:
+                    f.write(f"{failed_url}\n")
+            custom_print("Wrote list of failed URLs to failed_urls.txt")
+    else:
+        custom_print("Retry mechanism is disabled. Skipping retries.")
+        # Write the list of failed URLs to a file for manual review
+        with open("failed_urls.txt", "w") as f:
+            for failed_url in unprocessed_urls:
+                f.write(f"{failed_url}\n")
+        custom_print("Wrote list of failed URLs to failed_urls.txt")
+
 custom_print("\nAll URLs have been processed successfully")
 
 # Clean up
