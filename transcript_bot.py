@@ -36,7 +36,7 @@ except ImportError:
     def get_current_ip():
         try:
             import requests
-            response = requests.get("https://httpbin.org/ip", timeout=10)
+            response = requests.get("'https://api.ipify.org', headers=headers, timeout=10)
             if response.status_code == 200:
                 data = response.json()
                 if data and 'origin' in data:
