@@ -608,19 +608,19 @@ while len(processed_urls) < len(urls):
             def handle_ad_blocker_popup():
                 try:
                     # Look for the ad blocker popup by its title and button text
-                    popup = WebDriverWait(driver, 5).until(
+                    popup = WebDriverWait(driver, 3).until(
                         EC.presence_of_element_located((By.XPATH, 
                         "//*[contains(text(), 'Turn off ad blocker') or contains(text(), 'ad blocker')]//ancestor::div[contains(@role, 'dialog')]"))
                     )
                     # Find and click the OK button
-                    ok_button = WebDriverWait(popup, 5).until(
+                    ok_button = WebDriverWait(popup, 3).until(
                         EC.element_to_be_clickable((By.XPATH, ".//*[contains(text(), 'OK') or contains(@aria-label, 'OK')]"))
                     )
                     custom_print("Ad blocker popup detected. Clicking OK...")
                     ok_button.click()
                     custom_print("Closed ad blocker popup")
                     # Wait a moment after closing the popup
-                    time.sleep(1)
+                    time.sleep(0.3)
                     return True
                 except (TimeoutException, NoSuchElementException):
                     return False
@@ -696,7 +696,7 @@ while len(processed_urls) < len(urls):
                 # Try one last time with direct connection
                 try:
                     driver.get(url)
-                    time.sleep(random.uniform(1.5, 3))
+                    time.sleep(random.uniform(0.5, 2.5))
                     success = True
                 except Exception as e:
                     custom_print(f"Failed to load with direct connection: {e}", "error")
@@ -1306,11 +1306,11 @@ while len(processed_urls) < len(urls):
                         proxy_manager=proxy_manager,
                         headless=True
                     )
-                    wait = WebDriverWait(driver, random.uniform(1, 5))
+                    wait = WebDriverWait(driver, random.uniform(0.5,2.5))
                     
                     # Try to reload current URL
                     driver.get(url)
-                    time.sleep(random.uniform(1, 3))
+                    time.sleep(random.uniform(0.5, 2.5))
                     
                     # Skip current ad group and continue with next URL
                     break
