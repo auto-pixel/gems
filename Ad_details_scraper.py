@@ -487,12 +487,109 @@ else:
 # Initialize a dictionary to collect all ads data
 all_ads_data = {}
 
-# Implement URL randomization to avoid detection patterns
+# Initialize the set for URLs already processed
+previously_processed_urls = set()
+
+# Create a file to store processed URLs for persistence across runs
+processed_urls_file = "processed_urls.txt"
+
+# Option to force reprocessing of all URLs - set to False by default
+# Can set to True via command line or environment variable
+force_reprocess = os.environ.get('FORCE_REPROCESS', '').lower() in ('true', '1', 'yes')
+if force_reprocess:
+    custom_print("FORCE_REPROCESS is enabled - will process all URLs even if previously processed")
+
+# Function to normalize URLs for consistent comparison
+def normalize_url(url):
+    """Normalize URL to ensure consistent comparison"""
+    # Convert to lowercase
+    url = url.lower()
+    # Remove trailing slashes
+    url = url.rstrip('/')
+    # Remove common URL parameters that don't affect content
+    if '?' in url:
+        base_url = url.split('?')[0]
+        params = url.split('?')[1].split('&')
+        # Keep important parameters, filter out session IDs etc.
+        important_params = []
+        for param in params:
+            # Keep parameters like view_all_page_id, page_id, active_status
+            # Filter out parameters like session_id, fbclid
+            if any(key in param.lower() for key in ['page_id', 'active_status', 'country']):
+                important_params.append(param)
+        if important_params:
+            url = base_url + '?' + '&'.join(important_params)
+        else:
+            url = base_url
+    return url
+
+# Load previously processed URLs from file if it exists
+previously_processed_urls_from_file = set()
+try:
+    if os.path.exists(processed_urls_file) and not force_reprocess:
+        with open(processed_urls_file, 'r') as f:
+            for line in f:
+                url = line.strip()
+                if url:  # Skip empty lines
+                    # Store normalized URL for consistent comparison
+                    previously_processed_urls_from_file.add(normalize_url(url))
+        custom_print(f"Loaded {len(previously_processed_urls_from_file)} previously processed URLs from file")
+except Exception as e:
+    custom_print(f"Error loading previously processed URLs: {e}", "error")
+
+# Normalize all input URLs for consistent comparison
+normalized_urls = {normalize_url(url): url for url in urls}
+custom_print(f"Normalized {len(urls)} URLs for consistent comparison")
+
+# Implement URL prioritization and filtering
 # Use a copy of the URLs for randomization but track which ones were processed
-custom_print("Setting up randomized URL processing order to avoid detection patterns...")
-urls_to_process = urls.copy()  # Keep original list intact
-processed_urls = set()  # Track which URLs have been processed
-custom_print(f"Will process {len(urls_to_process)} URLs in randomized order")
+custom_print("Setting up URL processing order...")
+urls_to_process = []  # Start with an empty list
+processed_urls = set()  # Keep track of processed URLs in this session
+
+# Filter URLs to remove ones that were previously processed today or are in the persistent file
+skipped_count = 0
+for norm_url, original_url in normalized_urls.items():
+    if force_reprocess:
+        # When force_reprocess is enabled, process all URLs
+        urls_to_process.append(original_url)
+        custom_print(f"Adding URL to processing list (force mode): {original_url}")
+    elif norm_url in previously_processed_urls_from_file:
+        custom_print(f"Skipping URL that was previously processed (from persistent file): {original_url}")
+        skipped_count += 1
+    elif previously_processed_urls and original_url in previously_processed_urls:
+        # Check previously_processed_urls only if it's initialized and not empty
+        custom_print(f"Skipping URL already processed today: {original_url}")
+        skipped_count += 1
+    else:
+        urls_to_process.append(original_url)
+        custom_print(f"Adding new URL to processing list: {original_url}")
+
+custom_print(f"IMPORTANT: Will process {len(urls_to_process)} URLs and skip {skipped_count} already processed URLs")
+custom_print(f"Total input URLs: {len(urls)}, URLs to process: {len(urls_to_process)}, URLs to skip: {skipped_count}")
+
+# If no URLs to process, exit gracefully
+if not urls_to_process:
+    custom_print("All URLs have already been processed. Nothing new to process.")
+    # Clean up and exit
+    driver.quit()
+    sys.exit(0)
+
+# Reset total URLs to the final list we need to process
+total_urls = len(urls_to_process)
+urls = urls_to_process
+
+# Function to save processed URL to file
+def save_processed_url(url):
+    """Save a processed URL to the persistent file"""
+    try:
+        with open(processed_urls_file, 'a') as f:
+            # Save original URL, not normalized version
+            f.write(f"{url}\n")
+        return True
+    except Exception as e:
+        custom_print(f"Error saving processed URL to file: {e}", "error")
+        return False
 
 # Initialize progress tracking
 total_urls = len(urls)
@@ -1101,6 +1198,8 @@ while len(processed_urls) < len(urls):
         
         # Add this URL to processed_urls and continue to the next URL
         processed_urls.add(url)
+        # Also save to persistent file
+        save_processed_url(url)
         # Update progress after adding to processed_urls
         update_progress_percentage()
         continue
@@ -1513,6 +1612,8 @@ while len(processed_urls) < len(urls):
         
         # Add this URL to processed_urls and continue to the next URL
         processed_urls.add(url)
+        # Also save to persistent file
+        save_processed_url(url)
         # Update progress after adding to processed_urls
         update_progress_percentage()
         continue
@@ -2608,6 +2709,8 @@ while len(processed_urls) < len(urls):
             
     # Add this URL to the set of processed URLs
     processed_urls.add(url)
+    # Save to persistent file
+    save_processed_url(url)
     
     # Update progress after completing a URL
     if total_urls > 0:
