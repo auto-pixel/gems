@@ -604,9 +604,36 @@ while len(processed_urls) < len(urls):
                 wait = WebDriverWait(driver, random.uniform(1, 5))
                 request_count = 0  # Reset counter
             
+            # Function to handle ad blocker popup
+            def handle_ad_blocker_popup():
+                try:
+                    # Look for the ad blocker popup by its title and button text
+                    popup = WebDriverWait(driver, 5).until(
+                        EC.presence_of_element_located((By.XPATH, 
+                        "//*[contains(text(), 'Turn off ad blocker') or contains(text(), 'ad blocker')]//ancestor::div[contains(@role, 'dialog')]"))
+                    )
+                    # Find and click the OK button
+                    ok_button = WebDriverWait(popup, 5).until(
+                        EC.element_to_be_clickable((By.XPATH, ".//*[contains(text(), 'OK') or contains(@aria-label, 'OK')]"))
+                    )
+                    custom_print("Ad blocker popup detected. Clicking OK...")
+                    ok_button.click()
+                    custom_print("Closed ad blocker popup")
+                    # Wait a moment after closing the popup
+                    time.sleep(1)
+                    return True
+                except (TimeoutException, NoSuchElementException):
+                    return False
+                except Exception as e:
+                    custom_print(f"Error handling ad blocker popup: {e}", "warning")
+                    return False
+
             # Load the page directly
             driver.get(url)
             custom_print(f"Navigating to URL directly")
+            
+            # Check for and handle ad blocker popup
+            handle_ad_blocker_popup()
             
             # Ultra-minimal wait times for fastest scraping
             if random.random() < 0.05:  # 5% chance of slightly longer wait
