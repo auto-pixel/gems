@@ -569,7 +569,7 @@ while len(processed_urls) < len(urls):
     # Implement session cooling - add random delays between processing URLs
     if url_index > 1:
         # Ultra-minimal cooling period between URLs for fastest scraping
-        cooling_time = random.uniform(0.5, 3.5)  # 0.5-3.5 seconds between URLs - ultra fast
+        cooling_time = random.uniform(0.2, 1.5)  # Reduced from 0.5-3.5 to 0.2-1.5
         custom_print(f"Adding ultra-minimal cooling period of {cooling_time:.1f} seconds before next URL...")
         time.sleep(cooling_time)
     
@@ -610,7 +610,7 @@ while len(processed_urls) < len(urls):
                     # Look for the ad blocker popup by various possible selectors
                     # First try the dialog with "Turn off ad blocker" text
                     try:
-                        popup = WebDriverWait(driver, 5).until(
+                        popup = WebDriverWait(driver, 3).until(  # Reduced from 5 to 3
                             EC.presence_of_element_located((By.XPATH, 
                             "//div[contains(@role, 'dialog')][.//div[contains(text(), 'Turn off ad blocker')]]"))
                         )
@@ -618,7 +618,7 @@ while len(processed_urls) < len(urls):
                     except (TimeoutException, NoSuchElementException):
                         # Try alternate approach with any dialog containing ad blocker text
                         try:
-                            popup = WebDriverWait(driver, 3).until(
+                            popup = WebDriverWait(driver, 2).until(  # Reduced from 3 to 2
                                 EC.presence_of_element_located((By.XPATH, 
                                 "//div[contains(@role, 'dialog')][.//div[contains(text(), 'ad blocker')]]"))
                             )
@@ -632,7 +632,7 @@ while len(processed_urls) < len(urls):
                     # Find and click the OK button - try multiple approaches
                     try:
                         # First try direct button with OK text
-                        ok_button = WebDriverWait(popup, 3).until(
+                        ok_button = WebDriverWait(popup, 2).until(  # Reduced from 3 to 2
                             EC.element_to_be_clickable((By.XPATH, ".//div[text()='OK']"))
                         )
                         custom_print("Found OK button by exact text match")
@@ -652,7 +652,7 @@ while len(processed_urls) < len(urls):
                                 custom_print("Found OK button by color class")
                     
                     # Add a small delay before clicking to ensure stability
-                    time.sleep(0.5)
+                    time.sleep(0.2)  # Reduced from 0.5 to 0.2
                     custom_print("Ad blocker popup detected. Clicking OK...")
                     
                     # Click with both regular and JavaScript methods for reliability
@@ -664,7 +664,7 @@ while len(processed_urls) < len(urls):
                     
                     custom_print("Closed ad blocker popup")
                     # Wait a moment after closing the popup
-                    time.sleep(1.0)
+                    time.sleep(0.3)  # Reduced from 0.5 to 0.3
                     return True
                 except (TimeoutException, NoSuchElementException) as e:
                     custom_print(f"No ad blocker popup detected: {str(e)}")
@@ -681,15 +681,15 @@ while len(processed_urls) < len(urls):
             if handle_ad_blocker_popup():
                 # If popup was handled, give the page a moment to refresh
                 custom_print("Waiting for page to reload after dismissing popup...")
-                time.sleep(1.5)
+                time.sleep(0.5)  # Reduced from 0.8 to 0.5
 
             # Ultra-minimal wait times for fastest scraping
             if random.random() < 0.05:  # 5% chance of slightly longer wait
                 custom_print("Using minimal extended waiting pattern...")
-                wait_time = random.uniform(0.1, 0.5)
-                add_random_delays(wait_time, wait_time + 0.2)
+                wait_time = random.uniform(0.05, 0.3)  # Reduced range
+                add_random_delays(wait_time, wait_time + 0.1)  # Reduced upper bound
             else:
-                add_random_delays(0.1, 0.3)  # Extremely short delays
+                add_random_delays(0.05, 0.2)  # Reduced from 0.1, 0.3 to 0.05, 0.2
                 
             # Ultra-minimal mouse behavior - very rarely
             if random.random() < 0.1:  # 10% chance to do any movement
@@ -758,7 +758,7 @@ while len(processed_urls) < len(urls):
         
     # Ultra-minimal wait for initial ad content to load
     custom_print("Waiting for initial ad content to load...")
-    time.sleep(0.2)  # Ultra-reduced initial wait
+    time.sleep(0.1)  # Reduced from 0.2 to 0.1
     
     # Extract the ad count (like "~5 results") from the page immediately after loading
     custom_print("Extracting ad count from the page...")
@@ -1098,14 +1098,14 @@ while len(processed_urls) < len(urls):
         custom_print("Skipping initial mouse movements to save time...")
     
     # Add a minimal random delay before starting to scroll
-    delay = add_random_delays(0.2, 0.6)
+    delay = add_random_delays(0.1, 0.3)  # Reduced from 0.2, 0.6 to 0.1, 0.3
     custom_print(f"Waiting {delay:.2f} seconds before starting to scroll...")
     
     # Perform ultra-fast scrolling with minimal pauses
     scroll_count = perform_human_like_scroll(
         driver, 
-        scroll_pause_base=random.uniform(0.1, 0.5),  # Ultra-short pause time
-        max_scroll_attempts=4                       # Minimal attempts at bottom
+        scroll_pause_base=random.uniform(0.05, 0.3),  # Reduced from 0.1, 0.5 to 0.05, 0.3
+        max_scroll_attempts=3                        # Reduced from 4 to 3
     )
     
     custom_print(f"Completed {scroll_count} human-like scrolls")
@@ -1114,7 +1114,7 @@ while len(processed_urls) < len(urls):
     if handle_ad_blocker_popup():
         custom_print("Ad blocker popup appeared after scrolling, handled successfully")
         # Add slight pause to let page stabilize after popup dismissal
-        time.sleep(0.5)
+        time.sleep(0.2)  # Reduced from 0.5 to 0.2
 
     # Check if we've reached the end of results using various possible end-of-results messages
     try:
@@ -1478,14 +1478,14 @@ while len(processed_urls) < len(urls):
         custom_print("Skipping initial mouse movements to save time...")
     
     # Add a minimal random delay before starting to scroll
-    delay = add_random_delays(0.2, 0.6)
+    delay = add_random_delays(0.1, 0.3)  # Reduced from 0.2, 0.6 to 0.1, 0.3
     custom_print(f"Waiting {delay:.2f} seconds before starting to scroll...")
     
     # Perform ultra-fast scrolling with minimal pauses
     scroll_count = perform_human_like_scroll(
         driver, 
-        scroll_pause_base=random.uniform(0.1, 0.5),  # Ultra-short pause time
-        max_scroll_attempts=4                       # Minimal attempts at bottom
+        scroll_pause_base=random.uniform(0.05, 0.3),  # Reduced from 0.1, 0.5 to 0.05, 0.3
+        max_scroll_attempts=3                        # Reduced from 4 to 3
     )
     
     custom_print(f"Completed {scroll_count} human-like scrolls")
@@ -1494,7 +1494,7 @@ while len(processed_urls) < len(urls):
     if handle_ad_blocker_popup():
         custom_print("Ad blocker popup appeared after scrolling, handled successfully")
         # Add slight pause to let page stabilize after popup dismissal
-        time.sleep(0.5)
+        time.sleep(0.2)  # Reduced from 0.5 to 0.2
 
     # Check if we've reached the end of results using various possible end-of-results messages
     try:
@@ -1792,7 +1792,7 @@ while len(processed_urls) < len(urls):
                 
                 # Randomized tiny delays and interactions to look like a human investigating ads
                 if random.random() < 0.15:  # 15% chance of brief pause
-                    time.sleep(random.uniform(0.1, 0.8))
+                    time.sleep(random.uniform(0.05, 0.4))  # Reduced from 0.1, 0.8 to 0.05, 0.4
                 
                 # Occasionally 'inspect' the ad more carefully with mouse hover
                 if random.random() < 0.2:  # 20% chance
@@ -2603,7 +2603,7 @@ if unprocessed_urls:
             custom_print(f"Retrying {len(retry_urls)} URLs")
             
             # Add a longer cooling period before retries
-            cooling_time = random.uniform(5, 10)
+            cooling_time = random.uniform(2, 5)  # Reduced from 5-10 to 2-5
             custom_print(f"Adding cooling period of {cooling_time:.1f} seconds before retrying...")
             time.sleep(cooling_time)
             
@@ -2633,17 +2633,17 @@ if unprocessed_urls:
                     driver.get(retry_url)
                     
                     # Wait longer for page to load during retries
-                    time.sleep(random.uniform(3, 5))
+                    time.sleep(random.uniform(1.5, 3))  # Reduced from 3-5 to 1.5-3
                     
                     # Check for ad blocker popup with extra waiting time
                     try:
-                        WebDriverWait(driver, 8).until(
+                        WebDriverWait(driver, 5).until(  # Reduced from 8 to 5
                             EC.presence_of_element_located((By.XPATH, "//div[contains(@role, 'dialog')]"))
                         )
                         custom_print("Dialog detected, checking if it's an ad blocker popup...")
                         if handle_ad_blocker_popup():
                             custom_print("Successfully handled ad blocker popup during retry")
-                            time.sleep(2)  # Longer wait after handling popup
+                            time.sleep(1)  # Reduced from 2 to 1
                     except (TimeoutException, NoSuchElementException):
                         custom_print("No dialog detected during retry")
                     
@@ -2656,7 +2656,7 @@ if unprocessed_urls:
                     custom_print(f"Error during retry: {e}", "error")
                 
                 # Add cooling between retry attempts
-                time.sleep(random.uniform(2, 4))
+                time.sleep(random.uniform(1, 2))  # Reduced from 2-4 to 1-2
             
             # Update remaining URLs for next retry attempt
             retry_urls = [u for u in unprocessed_urls if u not in retry_processed]
