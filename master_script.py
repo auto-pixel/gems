@@ -14,12 +14,9 @@ os.makedirs(log_dir, exist_ok=True)
 # Single error log file that gets appended to
 log_file = os.path.join(log_dir, "fb_scraper_errors.log")
 
-# Configure logging to include all levels when running in GitHub Actions
-is_github_actions = os.environ.get('GITHUB_ACTIONS') == 'true'
-logging_level = logging.INFO if is_github_actions else logging.ERROR
-
+# Configure logging to only capture errors and higher severity
 logging.basicConfig(
-    level=logging_level,
+    level=logging.ERROR,  # Only log ERROR and higher severity
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
         logging.FileHandler(log_file),  # Write to file
@@ -34,10 +31,8 @@ script_progress = {}
 
 def print_all_progress():
     """Print all progress information in a clean format"""
-    # Only clear screen in local environment, not in GitHub Actions
-    if not is_github_actions:
-        # Clear the screen first (Windows)
-        os.system('cls' if os.name == 'nt' else 'clear')
+    # Clear the screen first (Windows)
+    os.system('cls')
     
     # Print the header
     print("===== FACEBOOK AD SCRAPER PROGRESS =====\n")
@@ -80,53 +75,50 @@ def run_script(script_name, description):
         logger.info(f"Python version: {platform.python_version()}")
         logger.info(f"System platform: {platform.platform()}")
         
-        # Set additional environment variables for GitHub Actions
+        # Set headless mode for Firefox in CI environments
         if is_github_actions:
-            # Firefox headless mode
             os.environ["MOZ_HEADLESS"] = "1"
-            os.environ["RUNNING_FROM_GITHUB_ACTIONS"] = "true"
-            os.environ["HEADLESS_MODE"] = "true"
             
             # Create Firefox profiles directory in appropriate location
             temp_dir = os.path.join(os.getcwd(), 'tmp')
             os.makedirs(temp_dir, exist_ok=True)
             firefox_profiles_dir = os.path.join(temp_dir, 'firefox_profiles')
             os.makedirs(firefox_profiles_dir, exist_ok=True)
-            
-            # Set Firefox profile path
-            os.environ["FIREFOX_PROFILE_PATH"] = firefox_profiles_dir
-            
-            # Check if using parallel processing
-            if script_name == "parallel_scraper.py":
-                logger.info("Using parallel processing for faster scraping")
-                os.environ["FORCE_REPROCESS"] = "true"  # Ensure all URLs are processed
         
-        # For specific scripts, use different methods
-        if script_name == "parallel_scraper.py":
-            # Run the parallel scraper instead of the regular Ad_details_scraper.py
-            logger.info(f"Running parallel scraper for efficient processing")
-            
-            # Prepare environment variables for the subprocess
-            env = os.environ.copy()
-            env['RUNNING_FROM_MASTER_SCRIPT'] = 'true'
-            
-            # Run as subprocess with the --force flag to process all URLs
-            process = subprocess.Popen(
-                [sys.executable, script_name, "--force"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                universal_newlines=True,
-                bufsize=1,
-                encoding='utf-8',
-                errors='replace',
-                env=env
-            )
+        # For specific scripts, import and run directly
+        if script_name == "facebook-ad-scraper-updated.py":
+            # Import and run the Facebook Ad Scraper directly
+            try:
+                # Create a backup of sys.argv to restore later
+                original_argv = sys.argv.copy()
+                
+                # Set up arguments for the Facebook Ad Scraper
+                sys.argv = [script_name]
+                
+                # Run the Facebook Ad Scraper's main function directly
+                import importlib.util
+                spec = importlib.util.spec_from_file_location("fb_ad_scraper", script_name)
+                fb_module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(fb_module)
+                fb_module.main()
+                
+                # Restore original sys.argv
+                sys.argv = original_argv
+                
+                logger.info(f"{description} completed successfully")
+                return True
+            except Exception as e:
+                logger.error(f"Error running {description} directly: {str(e)}")
+                return False
         else:
-            # For other scripts, use the normal subprocess approach
+            # For other scripts, use the normal subprocess approach for isolation
             logger.info(f"Running {script_name} using subprocess")
             
             # Prepare environment variables for the subprocess
             env = os.environ.copy()
+            
+            # Set a flag to indicate this is running from the master script
+            # This allows the child scripts to detect they're being run from master_script
             env['RUNNING_FROM_MASTER_SCRIPT'] = 'true'
             
             # Run as subprocess
@@ -136,61 +128,61 @@ def run_script(script_name, description):
                 stderr=subprocess.PIPE,
                 universal_newlines=True,
                 bufsize=1,
-                encoding='utf-8',
-                errors='replace',
+                encoding='utf-8', # Explicitly set encoding to UTF-8
+                errors='replace', # Replace invalid characters rather than crashing
                 env=env
             )
-        
-        # Process stdout and stderr directly without waiting for completion
-        import threading
-        
-        def log_output(stream, prefix):
-            try:
-                for line in iter(stream.readline, ''):
-                    if not line:
-                        break
-                    # Handle progress updates from child scripts
-                    if line.strip().startswith('PROGRESS [') or line.strip().startswith('[20'):
-                        # Extract script name from progress line
-                        script_match = re.search(r'\[([^\]]+)\]', line)
-                        if script_match:
-                            script_key = script_match.group(1)
-                            # Store the progress line for this script
-                            script_progress[script_key] = line.strip()
-                            # Update the progress display
-                            print_all_progress()
-                    else:
-                        logger.info(f"{prefix}: {line.strip()}")
-            except Exception as e:
-                logger.error(f"Error processing output stream from {prefix}: {str(e)}")
-                # Try to continue despite error
-        
-        # This ensures the progress is visible in GitHub Actions logs
-        stdout_thread = threading.Thread(target=log_output, args=(process.stdout, script_name))
-        stderr_thread = threading.Thread(target=log_output, args=(process.stderr, f"{script_name} stderr"))
-        stdout_thread.daemon = True
-        stderr_thread.daemon = True
-        stdout_thread.start()
-        stderr_thread.start()
-        
-        # Allow a moment for the progress display to initialize
-        time.sleep(1)
-        
-        # Wait for completion
-        return_code = process.wait()
-        
-        # Give threads time to finish processing output
-        stdout_thread.join(1)
-        stderr_thread.join(1)
-        
-        # Check return code
-        if return_code != 0:
-            logger.error(f"{description} failed with return code {return_code}")
-            return False
-        
-        elapsed_time = time.time() - start_time
-        logger.info(f"{description} completed successfully in {elapsed_time:.2f} seconds")
-        return True
+            
+            # Process stdout and stderr directly without waiting for completion
+            import threading
+            
+            def log_output(stream, prefix):
+                try:
+                    for line in iter(stream.readline, ''):
+                        if not line:
+                            break
+                        # Handle progress updates from child scripts
+                        if line.strip().startswith('PROGRESS ['):
+                            # Extract script name from progress line
+                            script_match = re.search(r'\[([^\]]+)\]', line)
+                            if script_match:
+                                script_key = script_match.group(1)
+                                # Store the progress line for this script
+                                script_progress[script_key] = line.strip()
+                                # Update the progress display
+                                print_all_progress()
+                        else:
+                            logger.info(f"{prefix}: {line.strip()}")
+                except Exception as e:
+                    logger.error(f"Error processing output stream from {prefix}: {str(e)}")
+                    # Try to continue despite error
+            
+            # This ensures the progress is visible in GitHub Actions logs
+            stdout_thread = threading.Thread(target=log_output, args=(process.stdout, script_name))
+            stderr_thread = threading.Thread(target=log_output, args=(process.stderr, f"{script_name} stderr"))
+            stdout_thread.daemon = True
+            stderr_thread.daemon = True
+            stdout_thread.start()
+            stderr_thread.start()
+            
+            # Allow a moment for the progress display to initialize
+            time.sleep(1)
+            
+            # Wait for completion
+            return_code = process.wait()
+            
+            # Give threads time to finish processing output
+            stdout_thread.join(1)
+            stderr_thread.join(1)
+            
+            # Check return code
+            if return_code != 0:
+                logger.error(f"{description} failed with return code {return_code}")
+                return False
+            
+            elapsed_time = time.time() - start_time
+            logger.info(f"{description} completed successfully in {elapsed_time:.2f} seconds")
+            return True
     
     except Exception as e:
         logger.error(f"Error running {description}: {str(e)}")
@@ -203,8 +195,8 @@ def main():
     # Define scripts to run in order
     scripts = [
         {
-            "name": "parallel_scraper.py", 
-            "description": "Facebook Ad Parallel Scraper"
+            "name": "Ad_details_scraper.py", 
+            "description": "Ad Details Scraper"
         }
     ]
     
