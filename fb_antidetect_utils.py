@@ -115,7 +115,7 @@ class ProxyManager:
     def _test_proxy(self, proxy):
         """Test if a proxy is working"""
         try:
-            test_url = "https://httpbin.org/ip"
+            test_url = "https://api.ipify.org"
             proxies = {
                 "http": f"http://{proxy}",
                 "https": f"http://{proxy}"
@@ -149,9 +149,8 @@ def get_randomized_options(browser_type="firefox"):
     logging.info(f"Using User-Agent: {user_agent}")
     
     # Detect execution environment
-    is_github_actions = os.environ.get('GITHUB_ACTIONS') == 'true' or os.environ.get('RUNNING_FROM_GITHUB_ACTIONS') == 'true'
+    is_github_actions = os.environ.get('GITHUB_ACTIONS') == 'true'
     is_ci = is_github_actions or 'CI' in os.environ
-    headless_mode = os.environ.get('HEADLESS_MODE', '').lower() in ('true', '1', 'yes')
     
     if browser_type.lower() == "firefox":
         options = FirefoxOptions()
@@ -178,13 +177,11 @@ def get_randomized_options(browser_type="firefox"):
         language = random.choice(LANGUAGES)
         options.set_preference("intl.accept_languages", language)
         
-        # Always use headless mode in CI environments or if explicitly requested
-        if is_ci or headless_mode:
+        # Always use headless mode in CI environments
+        if is_ci:
             options.add_argument('--headless')
             options.add_argument('--no-sandbox')
             options.add_argument('--disable-dev-shm-usage')
-            options.add_argument('--width=1920')
-            options.add_argument('--height=1080')
             
         # Add more privacy and anti-detection settings
         options.set_preference("privacy.resistFingerprinting", True)
@@ -202,13 +199,12 @@ def get_randomized_options(browser_type="firefox"):
         options.add_experimental_option("excludeSwitches", ["enable-automation"])
         options.add_experimental_option("useAutomationExtension", False)
         
-        # Add CI environment specific arguments or if headless mode is requested
-        if is_ci or headless_mode:
+        # Add CI environment specific arguments
+        if is_ci:
             options.add_argument("--headless=new")
             options.add_argument("--no-sandbox")
             options.add_argument("--disable-dev-shm-usage")
             options.add_argument("--disable-gpu")
-            options.add_argument("--window-size=1920,1080")
             
         # Add additional stealth settings
         options.add_argument("--disable-features=IsolateOrigins,site-per-process")
@@ -228,18 +224,14 @@ def create_stealth_driver(use_proxy=False, proxy_manager=None, headless=True, ta
     """Creates a WebDriver with enhanced anti-detection measures"""
     try:
         # Detect execution environment
-        is_github_actions = os.environ.get('GITHUB_ACTIONS') == 'true' or os.environ.get('RUNNING_FROM_GITHUB_ACTIONS') == 'true'
+        is_github_actions = os.environ.get('GITHUB_ACTIONS') == 'true'
         is_ci = is_github_actions or 'CI' in os.environ
-        headless_mode = os.environ.get('HEADLESS_MODE', '').lower() in ('true', '1', 'yes') or headless
-        
         logging.info(f"Running in {'CI environment' if is_ci else 'Local Environment'}")
-        logging.info(f"Headless mode: {headless_mode}")
         
         # Determine browser type based on platform
-        if is_ci or is_github_actions:
+        if is_ci:
             # Use Chrome in CI environments (more stable headless mode)
             browser_type = "chrome"
-            logging.info("Using Chrome for GitHub Actions environment")
         else:
             # Try to use undetected-chromedriver if available for better stealth
             try:
