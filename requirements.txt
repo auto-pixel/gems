@@ -1,35 +1,61 @@
 # Google Sheets API
-gspread>=6.0.0
-google-auth>=2.25.2
-google-auth-oauthlib>=1.1.0
+gspread
+google-auth
+google-auth-oauthlib
 
 # OpenAI Whisper and dependencies
-openai-whisper>=20230918
-torch>=2.2.0  # Updated for Python 3.12 compatibility
-numpy>=1.26.0  # Compatible with Python 3.12
-tqdm>=4.66.1
-more-itertools>=10.1.0
-transformers>=4.36.2
-ffmpeg-python>=0.2.0
+openai-whisper
+torch
+numpy
+tqdm
+more-itertools
+transformers
+ffmpeg-python
 
-# Selenium and WebDriver
-selenium>=4.15.2
-webdriver-manager>=4.0.1
-undetected-chromedriver>=3.5.5  # For enhanced stealth capabilities
+# Selenium and WebDriver for browser automation
+selenium
+webdriver-manager
+undetected-chromedriver
+playwright
 
 # Anti-detection and proxy handling
-fake-useragent>=1.4.0  # For generating realistic user agents
-requests>=2.31.0
-requests[socks]>=2.31.0  # For SOCKS proxy support
+fake-useragent
+requests
+requests[socks]
+filelock
 
 # Anthropic API for Claude
-anthropic>=0.5.0
+anthropic
+
+# Parallel processing
+threaded
+futures3
+
+# HTTP and networking
+aiohttp
+urllib3
 
 # Utilities
-python-dotenv>=1.0.0
-yt-dlp>=2023.10.13
+python-dotenv
+yt-dlp
+regex
+beautifulsoup4
+lxml
 
-# Performance and concurrency
-aiohttp>=3.9.1  # Compatible with Python 3.12
+# Environment and system tools
+psutil
+
+# Data processing
+pandas
+
+# Error handling and logging
+sentry-sdk
+
+# Date and time handling
+pytz
+python-dateutil
+
+# Cloud Storage
+dropbox # For Dropbox API integration
 
 # Note: futures is included in Python standard library as concurrent.futures
