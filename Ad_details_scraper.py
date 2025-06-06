@@ -1249,12 +1249,12 @@ while len(processed_urls) < len(urls):
         
         while attempt < max_scroll_attempts:
             # Scroll down with a random offset for more human-like behavior
-            scroll_amount = random.randint(600, 1000)  # Varying scroll amounts
+            scroll_amount = random.randint(600, 1500)  # Varying scroll amounts
             driver.execute_script(f"window.scrollBy(0, {scroll_amount});")
             scroll_count += 1
             
             # Random pause time (with some variation to appear more human-like)
-            variation = random.uniform(0.5, 1.5)  # 50% below to 50% above base time
+            variation = random.uniform(0.5, 2)  # 50% below to 50% above base time
             pause_time = scroll_pause_base * variation
             time.sleep(pause_time)
             
