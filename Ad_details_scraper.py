@@ -368,24 +368,62 @@ def extract_urls_from_milk_worksheet(worksheet):
 
 # Function to convert transparency URL to ad library URL
 def convert_to_ad_library_url(transparency_url):
-    """Convert a Facebook transparency URL to an Ad Library URL"""
+    """Convert a Facebook transparency URL or search URL to an Ad Library URL"""
     try:
-        # Skip URLs that are already Ad Library URLs
+        # Handle search-based URLs
+        if "search_type=keyword_unordered" in transparency_url:
+            # Parse the URL to extract parameters
+            from urllib.parse import urlparse, parse_qs, urlunparse, urlencode
+            
+            # Parse the URL and query parameters
+            parsed = urlparse(transparency_url)
+            params = parse_qs(parsed.query)
+            
+            # Ensure required parameters exist
+            if 'q' not in params:
+                custom_print(f"Search URL missing required 'q' parameter: {transparency_url}", "warning")
+                return None
+                
+            # Build the base URL with required parameters
+            base_params = {
+                'active_status': 'active',
+                'ad_type': 'all',
+                'country': 'US',  # Default to US, will be overridden if in URL
+                'media_type': 'all',
+                'search_type': 'keyword_unordered',
+                'q': params['q'][0]  # The search term
+            }
+            
+            # Add optional parameters if they exist
+            for param in ['country', 'is_targeted_country']:
+                if param in params:
+                    base_params[param] = params[param][0]
+            
+            # Rebuild the URL
+            new_url = urlunparse((
+                parsed.scheme,
+                parsed.netloc,
+                parsed.path,
+                parsed.params,
+                urlencode(base_params, doseq=True),
+                parsed.fragment
+            ))
+            
+            return new_url
+            
+        # Handle existing Ad Library URLs
         if "facebook.com/ads/library" in transparency_url:
             return transparency_url
         
-        # Extract page ID from URL
+        # Handle page transparency URLs
         if "/page_transparency/?page_id=" in transparency_url:
             page_id = transparency_url.split("/page_transparency/?page_id=")[1].split("&")[0]
-        else:
-            custom_print(f"Could not extract page ID from URL: {transparency_url}", "warning")
-            return None
+            return f"https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=ALL&view_all_page_id={page_id}&sort_data[direction]=desc&sort_data[mode]=relevancy_monthly_grouped"
             
-        # Construct Ad Library URL
-        ad_lib_url = f"https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=ALL&view_all_page_id={page_id}&sort_data[direction]=desc&sort_data[mode]=relevancy_monthly_grouped"
-        return ad_lib_url
+        custom_print(f"Unsupported URL format: {transparency_url}", "warning")
+        return None
     except Exception as e:
-        custom_print(f"Error converting transparency URL {transparency_url}: {e}", "error")
+        custom_print(f"Error converting URL {transparency_url}: {e}", "error")
         return None
 
 # Connect to Google Sheets
@@ -493,35 +531,16 @@ previously_processed_urls = set()
 # Create a file to store processed URLs for persistence across runs
 processed_urls_file = "processed_urls.txt"
 
-# Option to force reprocessing of all URLs - set to False by default
-# Can set to True via command line or environment variable
-force_reprocess = os.environ.get('FORCE_REPROCESS', '').lower() in ('true', '1', 'yes')
-if force_reprocess:
-    custom_print("FORCE_REPROCESS is enabled - will process all URLs even if previously processed")
+# Always force reprocessing of all URLs to ensure nothing is missed
+force_reprocess = True
+custom_print("FORCE_REPROCESS is enabled - will process all URLs")
 
-# Function to normalize URLs for consistent comparison
-def normalize_url(url):
-    """Normalize URL to ensure consistent comparison"""
-    # Convert to lowercase
-    url = url.lower()
-    # Remove trailing slashes
-    url = url.rstrip('/')
-    # Remove common URL parameters that don't affect content
-    if '?' in url:
-        base_url = url.split('?')[0]
-        params = url.split('?')[1].split('&')
-        # Keep important parameters, filter out session IDs etc.
-        important_params = []
-        for param in params:
-            # Keep parameters like view_all_page_id, page_id, active_status
-            # Filter out parameters like session_id, fbclid
-            if any(key in param.lower() for key in ['page_id', 'active_status', 'country']):
-                important_params.append(param)
-        if important_params:
-            url = base_url + '?' + '&'.join(important_params)
-        else:
-            url = base_url
-    return url
+# Simple function to clean up URLs (minimal processing)
+def clean_url(url):
+    """Basic URL cleaning - just remove whitespace and ensure it's a string"""
+    if not url:
+        return ""
+    return str(url).strip()
 
 # Load previously processed URLs from file if it exists
 previously_processed_urls_from_file = set()
@@ -529,17 +548,16 @@ try:
     if os.path.exists(processed_urls_file) and not force_reprocess:
         with open(processed_urls_file, 'r') as f:
             for line in f:
-                url = line.strip()
+                url = clean_url(line)
                 if url:  # Skip empty lines
-                    # Store normalized URL for consistent comparison
-                    previously_processed_urls_from_file.add(normalize_url(url))
+                    previously_processed_urls_from_file.add(url)
         custom_print(f"Loaded {len(previously_processed_urls_from_file)} previously processed URLs from file")
 except Exception as e:
     custom_print(f"Error loading previously processed URLs: {e}", "error")
 
-# Normalize all input URLs for consistent comparison
-normalized_urls = {normalize_url(url): url for url in urls}
-custom_print(f"Normalized {len(urls)} URLs for consistent comparison")
+# Clean all input URLs
+cleaned_urls = {clean_url(url): url for url in urls}
+custom_print(f"Cleaned {len(urls)} URLs for processing")
 
 # Implement URL prioritization and filtering
 # Use a copy of the URLs for randomization but track which ones were processed
@@ -547,23 +565,10 @@ custom_print("Setting up URL processing order...")
 urls_to_process = []  # Start with an empty list
 processed_urls = set()  # Keep track of processed URLs in this session
 
-# Filter URLs to remove ones that were previously processed today or are in the persistent file
+# Process all URLs when force_reprocess is True
+urls_to_process = urls.copy()
 skipped_count = 0
-for norm_url, original_url in normalized_urls.items():
-    if force_reprocess:
-        # When force_reprocess is enabled, process all URLs
-        urls_to_process.append(original_url)
-        custom_print(f"Adding URL to processing list (force mode): {original_url}")
-    elif norm_url in previously_processed_urls_from_file:
-        custom_print(f"Skipping URL that was previously processed (from persistent file): {original_url}")
-        skipped_count += 1
-    elif previously_processed_urls and original_url in previously_processed_urls:
-        # Check previously_processed_urls only if it's initialized and not empty
-        custom_print(f"Skipping URL already processed today: {original_url}")
-        skipped_count += 1
-    else:
-        urls_to_process.append(original_url)
-        custom_print(f"Adding new URL to processing list: {original_url}")
+custom_print(f"Added {len(urls_to_process)} URLs to processing list")
 
 custom_print(f"IMPORTANT: Will process {len(urls_to_process)} URLs and skip {skipped_count} already processed URLs")
 custom_print(f"Total input URLs: {len(urls)}, URLs to process: {len(urls_to_process)}, URLs to skip: {skipped_count}")
