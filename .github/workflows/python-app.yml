@@ -23,11 +23,11 @@ jobs:
       
       - name: Install system dependencies
         run: |
-          # Install required system packages
+          # Install required system packages for Ubuntu Noble (24.04)
           sudo apt-get update
-          sudo apt-get install -y wget unzip xvfb libxss1 libxtst6 libnss3 libatk1.0-0 libatk-bridge2.0-0 \
-            libcups2 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2 libxkbcommon0 \
-            libatspi2.0-0 libx11-xcb1
+          sudo apt-get install -y wget unzip xvfb libxss1 libxtst6 libnss3 libatk1.0-0 \
+            libcups2 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libxkbcommon0 \
+            libatspi2.0-0 libx11-xcb1 libasound2t64 libatk-bridge2.0-0
           
           # Install Chrome
           wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
