@@ -305,35 +305,19 @@ def create_stealth_driver(use_proxy=False, proxy_manager=None, headless=True, ta
         is_ci = is_github_actions or 'CI' in os.environ
         logging.info(f"Running in {'CI environment' if is_ci else 'Local Environment'}")
         
-        # Always use undetected_chromedriver for better stealth
-        browser_type = "undetected_chrome"
-        logging.info("Using undetected-chromedriver for enhanced stealth")
-                
-        logging.info(f"Creating stealth browser driver with anti-detection measures using {browser_type}")
-        
-        options = get_randomized_options(browser_type)
-        
         # Set proxy if needed
+        proxy = None
         if use_proxy and proxy_manager:
             proxy = proxy_manager.get_next_proxy()
             if proxy:
-                # For Firefox, we need to use preferences
+                if '://' in proxy:
+                    proxy = proxy.split('://')[1]  # Remove protocol if present
                 proxy_parts = proxy.split(':')
-                if len(proxy_parts) == 2:
-                    host, port = proxy_parts
-                    if isinstance(options, FirefoxOptions):
-                        options.set_preference("network.proxy.type", 1)
-                        options.set_preference("network.proxy.http", host)
-                        options.set_preference("network.proxy.http_port", int(port))
-                        options.set_preference("network.proxy.ssl", host)
-                        options.set_preference("network.proxy.ssl_port", int(port))
-                    elif isinstance(options, ChromeOptions):
-                        options.add_argument(f"--proxy-server={proxy}")
+                if len(proxy_parts) >= 2:  # Handle both host:port and user:pass@host:port
                     logging.info(f"Using proxy: {proxy}")
                 else:
-                    logging.warning(f"Invalid proxy format: {proxy}. Expected format is host:port")
-            else:
-                logging.warning("No valid proxy found, using direct connection")
+                    logging.warning(f"Invalid proxy format: {proxy}. Expected format is host:port or user:pass@host:port")
+                    proxy = None
         
         # Try different Chrome versions
         versions_to_try = [114, 112, None]  # Try latest stable if specific versions fail
@@ -346,9 +330,20 @@ def create_stealth_driver(use_proxy=False, proxy_manager=None, headless=True, ta
                 # Create a fresh driver instance for each attempt
                 driver = create_driver(version)
                 
+                # Set proxy if needed
+                if proxy:
+                    driver.execute_cdp_cmd('Network.setCacheDisabled', {'cacheDisabled': True})
+                    driver.execute_cdp_cmd('Network.setBypassServiceWorker', {'bypass': True})
+                    driver.execute_cdp_cmd('Network.enable', {})
+                
                 # Additional anti-detection measures
                 driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
                 driver.set_page_load_timeout(60)
+                
+                # Set a random window size to avoid detection
+                if not headless:
+                    width, height = random.choice(VIEWPORT_SIZES)
+                    driver.set_window_size(width, height)
                 
                 logging.info(f"Successfully created Undetected Chrome {version_str} WebDriver")
                 return driver
@@ -358,31 +353,15 @@ def create_stealth_driver(use_proxy=False, proxy_manager=None, headless=True, ta
                 if version is None:  # If we've tried the latest version and still failed
                     raise RuntimeError("Failed to initialize Chrome. Please check your installation and try again.")
                 continue  # Try next version
-        
-        # Add anti-detection measures for both browser types
-        try:
-            driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-            
-            # Set a random window size to avoid detection
-            if not headless:
-                width, height = random.choice(VIEWPORT_SIZES)
-                driver.set_window_size(width, height)
-            
-            # Set page load timeout
-            driver.set_page_load_timeout(60)
-            
-            return driver
-        except Exception as e:
-            logging.error(f"Error setting up anti-detection measures: {e}")
-            # Close driver if it was created but later steps failed
-            if 'driver' in locals():
-                try:
-                    driver.quit()
-                except:
-                    pass
-            raise
+                
     except Exception as e:
         logging.error(f"Error creating stealth driver: {e}")
+        # Close driver if it was created but later steps failed
+        if 'driver' in locals():
+            try:
+                driver.quit()
+            except:
+                pass
         raise
 
 def perform_human_like_scroll(driver, scroll_pause_base=3.0, max_scroll_attempts=3):
