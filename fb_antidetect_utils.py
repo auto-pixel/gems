@@ -9,16 +9,15 @@ import json
 import os
 import sys
 import requests
+import undetected_chromedriver as uc
 from selenium import webdriver
-from selenium.webdriver.firefox.options import Options as FirefoxOptions
-from selenium.webdriver.firefox.service import Service as FirefoxService
-from webdriver_manager.firefox import GeckoDriverManager
 from selenium.webdriver.chrome.options import Options as ChromeOptions
 from selenium.webdriver.chrome.service import Service as ChromeService
 from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.by import By
 import logging
+from fake_useragent import UserAgent
 
 # Modern, realistic user agents
 USER_AGENTS = [
@@ -140,9 +139,9 @@ def get_randomized_options(browser_type="firefox"):
     """
     Creates browser options with randomized user agent and other fingerprint masking features
     Args:
-        browser_type: 'firefox' or 'chrome'
+        browser_type: 'firefox', 'chrome', or 'undetected_chrome'
     Returns:
-        FirefoxOptions or ChromeOptions object
+        Options object for the specified browser
     """
     # Random user agent
     user_agent = random.choice(USER_AGENTS)
@@ -187,7 +186,8 @@ def get_randomized_options(browser_type="firefox"):
         options.set_preference("privacy.resistFingerprinting", True)
         options.set_preference("privacy.trackingprotection.fingerprinting.enabled", True)
         
-    elif browser_type.lower() == "chrome":
+    elif browser_type.lower() in ["chrome", "undetected_chrome"]:
+        # Use ChromeOptions for both chrome and undetected_chrome
         options = ChromeOptions()
         
         # Set user agent
@@ -196,11 +196,18 @@ def get_randomized_options(browser_type="firefox"):
         # Add anti-detection arguments
         options.add_argument("--disable-blink-features=AutomationControlled")
         options.add_argument("--disable-extensions")
+        options.add_argument("--disable-infobars")
+        options.add_argument("--disable-notifications")
+        options.add_argument("--disable-popup-blocking")
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-dev-shm-usage")
+        
+        # Disable automation flags
         options.add_experimental_option("excludeSwitches", ["enable-automation"])
         options.add_experimental_option("useAutomationExtension", False)
         
         # Add CI environment specific arguments
-        if is_ci:
+        if is_ci or browser_type.lower() == "undetected_chrome":
             options.add_argument("--headless=new")
             options.add_argument("--no-sandbox")
             options.add_argument("--disable-dev-shm-usage")
@@ -220,28 +227,87 @@ def get_randomized_options(browser_type="firefox"):
     
     return options
 
+def install_requirements():
+    """Install required packages for undetected-chromedriver"""
+    try:
+        import subprocess
+        import sys
+        requirements = [
+            'undetected-chromedriver>=3.5.5',
+            'selenium>=4.15.2',
+            'webdriver-manager>=4.0.1',
+            'fake-useragent>=1.4.0'
+        ]
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "--upgrade"] + requirements)
+        logging.info("Successfully installed/updated required packages")
+        return True
+    except Exception as e:
+        logging.error(f"Failed to install requirements: {e}")
+        return False
+
 def create_stealth_driver(use_proxy=False, proxy_manager=None, headless=True, target_url=None):
-    """Creates a WebDriver with enhanced anti-detection measures"""
+    """Creates a WebDriver with enhanced anti-detection measures using Undetected Chromedriver"""
+    # Try to import required packages
+    try:
+        import undetected_chromedriver as uc
+        from selenium import webdriver
+        from fake_useragent import UserAgent
+    except ImportError:
+        logging.warning("Required packages not found. Attempting to install...")
+        if not install_requirements():
+            raise ImportError("Failed to install required packages. Please install them manually.")
+        import undetected_chromedriver as uc
+        from selenium import webdriver
+        from fake_useragent import UserAgent
+    
+    def create_driver(version=None):
+        """Helper function to create a new driver instance"""
+        options = uc.ChromeOptions()
+        
+        # Set a random user agent
+        ua = UserAgent()
+        user_agent = ua.chrome
+        
+        # Basic options
+        options.add_argument(f'--user-agent={user_agent}')
+        options.add_argument('--disable-blink-features=AutomationControlled')
+        options.add_argument('--disable-infobars')
+        options.add_argument('--disable-notifications')
+        options.add_argument('--disable-popup-blocking')
+        options.add_argument('--disable-extensions')
+        options.add_argument('--no-sandbox')
+        options.add_argument('--disable-dev-shm-usage')
+        options.add_argument('--disable-gpu')
+        
+        # Headless mode
+        if headless:
+            options.add_argument('--headless=new')
+        
+        # Random window size
+        width, height = random.choice(VIEWPORT_SIZES)
+        options.add_argument(f'--window-size={width},{height}')
+        
+        # Create driver with the specified version or latest
+        driver_kwargs = {
+            'options': options,
+            'use_subprocess': True,
+            'headless': headless
+        }
+        
+        if version:
+            driver_kwargs['version_main'] = version
+        
+        return uc.Chrome(**driver_kwargs)
+    
     try:
         # Detect execution environment
         is_github_actions = os.environ.get('GITHUB_ACTIONS') == 'true'
         is_ci = is_github_actions or 'CI' in os.environ
         logging.info(f"Running in {'CI environment' if is_ci else 'Local Environment'}")
         
-        # Determine browser type based on platform
-        if is_ci:
-            # Use Chrome in CI environments (more stable headless mode)
-            browser_type = "chrome"
-        else:
-            # Try to use undetected-chromedriver if available for better stealth
-            try:
-                import undetected_chromedriver as uc
-                browser_type = "undetected_chrome"
-                logging.info("Using undetected-chromedriver for enhanced stealth")
-            except ImportError:
-                # Fall back to Firefox if undetected_chromedriver not available
-                browser_type = "firefox"
-                logging.info("Undetected-chromedriver not available, using Firefox")
+        # Always use undetected_chromedriver for better stealth
+        browser_type = "undetected_chrome"
+        logging.info("Using undetected-chromedriver for enhanced stealth")
                 
         logging.info(f"Creating stealth browser driver with anti-detection measures using {browser_type}")
         
@@ -269,132 +335,29 @@ def create_stealth_driver(use_proxy=False, proxy_manager=None, headless=True, ta
             else:
                 logging.warning("No valid proxy found, using direct connection")
         
-        # Initialize the appropriate WebDriver
-        is_github_actions = os.environ.get('GITHUB_ACTIONS') == 'true'
-        is_ci = is_github_actions or 'CI' in os.environ
+        # Try different Chrome versions
+        versions_to_try = [114, 112, None]  # Try latest stable if specific versions fail
         
-        if browser_type == "undetected_chrome":
+        for version in versions_to_try:
             try:
-                # Use undetected-chromedriver for maximum stealth
-                import undetected_chromedriver as uc
+                version_str = f"v{version}" if version else "latest"
+                logging.info(f"Attempting to initialize Undetected Chrome {version_str}...")
                 
-                # Configure undetected_chromedriver options
-                uc_options = uc.ChromeOptions()
-                uc_options.add_argument(f"--user-agent={random.choice(USER_AGENTS)}")
+                # Create a fresh driver instance for each attempt
+                driver = create_driver(version)
                 
-                # Configure proxy if needed
-                if use_proxy and proxy_manager:
-                    proxy = proxy_manager.get_next_proxy()
-                    if proxy:
-                        uc_options.add_argument(f"--proxy-server={proxy}")
+                # Additional anti-detection measures
+                driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+                driver.set_page_load_timeout(60)
                 
-                # Headless mode (with reduced detection features)
-                if headless:
-                    uc_options.add_argument('--headless=new')
+                logging.info(f"Successfully created Undetected Chrome {version_str} WebDriver")
+                return driver
                 
-                # Create driver with undetected_chromedriver
-                driver = uc.Chrome(options=uc_options)
-                logging.info("Successfully created undetected Chrome WebDriver")
-                
-            except Exception as uc_error:
-                logging.error(f"Error creating undetected-chromedriver: {uc_error}")
-                # Fall back to regular Chrome if undetected fails
-                try:
-                    chrome_service = ChromeService(ChromeDriverManager().install())
-                    driver = webdriver.Chrome(service=chrome_service, options=options)
-                    logging.info("Fallback to regular Chrome WebDriver successful")
-                except Exception as chrome_error:
-                    logging.error(f"Error creating Chrome driver: {chrome_error}")
-                    raise
-        elif browser_type == "chrome":
-            try:
-                # For Chrome in any environment
-                chrome_service = ChromeService(ChromeDriverManager().install())
-                driver = webdriver.Chrome(service=chrome_service, options=options)
-                logging.info("Successfully created Chrome WebDriver")
-            except Exception as chrome_error:
-                logging.error(f"Error creating Chrome driver: {chrome_error}")
-                raise
-        else:
-            # For Firefox
-            try:
-                # Direct download approach to avoid GitHub API rate limits
-                import platform
-                import zipfile
-                import tarfile
-                from io import BytesIO
-                
-                # Create a driver directory
-                driver_dir = os.path.join(os.getcwd(), 'drivers')
-                os.makedirs(driver_dir, exist_ok=True)
-                
-                # Determine system and architecture
-                system = platform.system().lower()
-                is_64bits = sys.maxsize > 2**32
-                
-                # Set up file names and URLs based on OS
-                if system == 'windows':
-                    gecko_filename = 'geckodriver.exe'
-                    if is_64bits:
-                        url = 'https://github.com/mozilla/geckodriver/releases/download/v0.33.0/geckodriver-v0.33.0-win64.zip'
-                    else:
-                        url = 'https://github.com/mozilla/geckodriver/releases/download/v0.33.0/geckodriver-v0.33.0-win32.zip'
-                    is_zip = True
-                elif system == 'darwin':  # macOS
-                    gecko_filename = 'geckodriver'
-                    if platform.processor() == 'arm':
-                        url = 'https://github.com/mozilla/geckodriver/releases/download/v0.33.0/geckodriver-v0.33.0-macos-aarch64.tar.gz'
-                    else:
-                        url = 'https://github.com/mozilla/geckodriver/releases/download/v0.33.0/geckodriver-v0.33.0-macos.tar.gz'
-                    is_zip = False
-                else:  # Linux
-                    gecko_filename = 'geckodriver'
-                    if is_64bits:
-                        url = 'https://github.com/mozilla/geckodriver/releases/download/v0.33.0/geckodriver-v0.33.0-linux64.tar.gz'
-                    else:
-                        url = 'https://github.com/mozilla/geckodriver/releases/download/v0.33.0/geckodriver-v0.33.0-linux32.tar.gz'
-                    is_zip = False
-                
-                driver_path = os.path.join(driver_dir, gecko_filename)
-                
-                # Only download if driver doesn't exist
-                if not os.path.exists(driver_path):
-                    logging.info(f"Downloading geckodriver from {url}")
-                    
-                    # Use a fake User-Agent to avoid triggering rate limits
-                    headers = {
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-                    }
-                    
-                    # Direct download from GitHub releases (doesn't use API)
-                    response = requests.get(url, headers=headers, timeout=30)
-                    
-                    if response.status_code == 200:
-                        # Extract the driver
-                        if is_zip:
-                            with zipfile.ZipFile(BytesIO(response.content)) as zip_ref:
-                                zip_ref.extract(gecko_filename, driver_dir)
-                        else:
-                            with tarfile.open(fileobj=BytesIO(response.content), mode='r:gz') as tar_ref:
-                                tar_ref.extract(gecko_filename, driver_dir)
-                        
-                        # Make executable on Unix systems
-                        if system != 'windows':
-                            os.chmod(driver_path, 0o755)
-                            
-                        logging.info(f"Successfully downloaded geckodriver to {driver_path}")
-                    else:
-                        raise Exception(f"Failed to download geckodriver: HTTP {response.status_code}")
-                else:
-                    logging.info(f"Using existing geckodriver at {driver_path}")
-                
-                # Create service with our downloaded driver
-                firefox_service = FirefoxService(executable_path=driver_path)
-                driver = webdriver.Firefox(service=firefox_service, options=options)
-                logging.info("Successfully created Firefox WebDriver")
-            except Exception as firefox_error:
-                logging.error(f"Error creating Firefox driver: {firefox_error}")
-                raise
+            except Exception as e:
+                logging.warning(f"Failed to initialize Chrome {version if version else 'latest'}: {str(e)}")
+                if version is None:  # If we've tried the latest version and still failed
+                    raise RuntimeError("Failed to initialize Chrome. Please check your installation and try again.")
+                continue  # Try next version
         
         # Add anti-detection measures for both browser types
         try:
