@@ -17,7 +17,6 @@ selenium
 webdriver-manager
 undetected-chromedriver
 playwright
-
 # Anti-detection and proxy handling
 fake-useragent
 requests
