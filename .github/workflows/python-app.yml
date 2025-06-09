@@ -1,4 +1,4 @@
-name: Gems Scraper
+name: Gems
 
 on:
   schedule:
