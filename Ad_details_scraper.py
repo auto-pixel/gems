@@ -213,14 +213,65 @@ PLATFORM_MAPPING = {
     ("https://static.xx.fbcdn.net/rsrc.php/v4/yO/r/ZuVkzM77JQ-.png", "-68px -189px"): "Audience Network",
     ("https://static.xx.fbcdn.net/rsrc.php/v4/yO/r/ZuVkzM77JQ-.png", "-51px -189px"): "Messenger",
     ("https://static.xx.fbcdn.net/rsrc.php/v4/abc/xyz.png", "-100px -200px"): "Messenger",
-    ("https://static.xx.fbcdn.net/rsrc.php/v4/y5/r/7Ia52m_bDk0.png", "-246px -280px"): "Messenger",  # Added based on new icon format
+    ("https://static.xx.fbcdn.net/rsrc.php/v4/y5/r/7Ia52m_bDk0.png", "-246px -280px"): "Messenger",
     ("https://static.xx.fbcdn.net/rsrc.php/v4/yO/r/ZuVkzM77JQ-.png", "-34px -189px"): "WhatsApp",
     ("https://static.xx.fbcdn.net/rsrc.php/v4/yO/r/ZuVkzM77JQ-.png", "-56px -206px"): "Financial products and services",
     ("https://static.xx.fbcdn.net/rsrc.php/v4/yV/r/OLar8kmsCmm.png", "0px -1214px"): "Thread"
 }
 CATEGORY_MAPPING = {
+    # Business and Employment
     ("https://static.xx.fbcdn.net/rsrc.php/v4/y5/r/7Ia52m_bDk0.png", "-189px -384px"): "Employment",
-    ("https://static.xx.fbcdn.net/rsrc.php/v4/yO/r/ZuVkzM77JQ-.png", "-56px -206px"): "Financial products and services",
+    ("https://static.xx.fbcdn.net/rsrc.php/v4/y5/r/7Ia52m_bDk0.png", "-204px -384px"): "Job Search",
+    ("https://static.xx.fbcdn.net/rsrc.php/v4/y5/r/7Ia52m_bDk0.png", "-68px -384px"): "Business Services",
+    
+    # Financial
+    ("https://static.xx.fbcdn.net/rsrc.php/v4/yO/r/ZuVkzM77JQ-.png", "-56px -206px"): "Financial Products and Services",
+    ("https://static.xx.fbcdn.net/rsrc.php/v4/yO/r/ZuVkzM77JQ-.png", "-34px -206px"): "Insurance",
+    ("https://static.xx.fbcdn.net/rsrc.php/v4/yO/r/ZuVkzM77JQ-.png", "-102px -206px"): "Investing",
+    ("https://static.xx.fbcdn.net/rsrc.php/v4/yO/r/ZuVkzM77JQ-.png", "-85px -206px"): "Loans",
+    
+    # E-commerce & Retail
+    ("https://static.xx.fbcdn.net/rsrc.php/v4/yy/r/7K0VH3FkE1a.png", "-51px -153px"): "Shopping & Retail",
+    ("https://static.xx.fbcdn.net/rsrc.php/v4/yy/r/7K0VH3FkE1a.png", "-68px -153px"): "Fashion & Apparel",
+    ("https://static.xx.fbcdn.net/rsrc.php/v4/yy/r/7K0VH3FkE1a.png", "-85px -153px"): "Electronics",
+    ("https://static.xx.fbcdn.net/rsrc.php/v4/yy/r/7K0VH3FkE1a.png", "-102px -153px"): "Home & Garden",
+    
+    # Technology
+    ("https://static.xx.fbcdn.net/rsrc.php/v4/y5/r/7Ia52m_bDk0.png", "-102px -153px"): "Software",
+    ("https://static.xx.fbcdn.net/rsrc.php/v4/y5/r/7Ia52m_bDk0.png", "-85px -153px"): "Mobile Apps",
+    ("https://static.xx.fbcdn.net/rsrc.php/v4/y5/r/7Ia52m_bDk0.png", "-68px -153px"): "Gaming",
+    
+    # Health & Beauty
+    ("https://static.xx.fbcdn.net/rsrc.php/v4/yO/r/ZuVkzM77JQ-.png", "-17px -206px"): "Health & Wellness",
+    ("https://static.xx.fbcdn.net/rsrc.php/v4/yO/r/ZuVkzM77JQ-.png", "0px -206px"): "Beauty & Personal Care",
+    ("https://static.xx.fbcdn.net/rsrc.php/v4/yO/r/ZuVkzM77JQ-.png", "-17px -189px"): "Fitness",
+    
+    # Education
+    ("https://static.xx.fbcdn.net/rsrc.php/v4/y5/r/7Ia52m_bDk0.png", "-34px -153px"): "Education",
+    ("https://static.xx.fbcdn.net/rsrc.php/v4/y5/r/7Ia52m_bDk0.png", "-17px -153px"): "Online Courses",
+    ("https://static.xx.fbcdn.net/rsrc.php/v4/y5/r/7Ia52m_bDk0.png", "0px -153px"): "Tutoring",
+    
+    # Real Estate
+    ("https://static.xx.fbcdn.net/rsrc.php/v4/yO/r/ZuVkzM77JQ-.png", "-119px -206px"): "Real Estate",
+    ("https://static.xx.fbcdn.net/rsrc.php/v4/yO/r/ZuVkzM77JQ-.png", "-136px -206px"): "Property Management",
+    
+    # Travel & Hospitality
+    ("https://static.xx.fbcdn.net/rsrc.php/v4/yy/r/7K0VH3FkE1a.png", "-119px -153px"): "Travel",
+    ("https://static.xx.fbcdn.net/rsrc.php/v4/yy/r/7K0VH3FkE1a.png", "-136px -153px"): "Hotels & Lodging",
+    
+    # Food & Beverage
+    ("https://static.xx.fbcdn.net/rsrc.php/v4/yy/r/7K0VH3FkE1a.png", "-17px -153px"): "Food & Beverage",
+    ("https://static.xx.fbcdn.net/rsrc.php/v4/yy/r/7K0VH3FkE1a.png", "-34px -153px"): "Restaurants",
+    
+    # Non-profit & Social Causes
+    ("https://static.xx.fbcdn.net/rsrc.php/v4/y5/r/7Ia52m_bDk0.png", "-51px -153px"): "Non-profit",
+    ("https://static.xx.fbcdn.net/rsrc.php/v4/y5/r/7Ia52m_bDk0.png", "-34px -170px"): "Charity",
+    
+    # Entertainment
+    ("https://static.xx.fbcdn.net/rsrc.php/v4/yy/r/7K0VH3FkE1a.png", "-51px -170px"): "Entertainment",
+    ("https://static.xx.fbcdn.net/rsrc.php/v4/yy/r/7K0VH3FkE1a.png", "-68px -170px"): "Movies",
+    ("https://static.xx.fbcdn.net/rsrc.php/v4/yy/r/7K0VH3FkE1a.png", "-85px -170px"): "Music",
+    ("https://static.xx.fbcdn.net/rsrc.php/v4/yy/r/7K0VH3FkE1a.png", "-102px -170px"): "Sports"
 }
 
 # Configure proxy manager with enhanced proxy handling
