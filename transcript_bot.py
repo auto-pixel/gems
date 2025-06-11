@@ -190,7 +190,7 @@ def transcribe_video(file_path, model=None):
         # First check if the file exists before attempting transcription
         if not os.path.exists(file_path):
             log(f"File not found: {file_path}", "error")
-            return None
+            return "No audio file"
             
         # Check if ffmpeg is installed and in PATH
         import subprocess
@@ -200,8 +200,8 @@ def transcribe_video(file_path, model=None):
             subprocess.run(['ffmpeg', '-version'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
             log("ffmpeg is installed and available", "info")
         except (subprocess.SubprocessError, FileNotFoundError):
-            log("Error: ffmpeg not found in PATH. Please install it via the workflow.", "error")
-            return f"[Transcription failed: ffmpeg not installed. Please add 'sudo apt-get update && sudo apt-get install -y ffmpeg' to your workflow.]"
+            log("Error: ffmpeg not found in PATH", "error")
+            return "No audio file"
         
         # Load model if not provided
         if model is None:
@@ -211,6 +211,7 @@ def transcribe_video(file_path, model=None):
         return result["text"]
     except Exception as e:
         log(f"Failed to transcribe video: {file_path} | Error: {e}", "error")
+        return "No audio file"
         return f"[Transcription error: {str(e)}]"  # Return the error as part of the transcript rather than None
 
 # ============ PROGRESS TRACKING =================
