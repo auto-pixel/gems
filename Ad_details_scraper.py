@@ -2333,34 +2333,53 @@ while len(processed_urls) < len(urls):
                         ad_data["media_url"] = None
                         ad_data["thumbnail_url"] = None
                         
-                        # Check for video within the link container
+                        # Check for video first
+                        video_found = False
                         try:
-                            video_element = child_div.find_element(By.XPATH, './/video')
-                            media_url = video_element.get_attribute('src')
-                            if media_url: # Ensure src is not empty
-                               ad_data["media_type"] = "video"
-                               ad_data["media_url"] = media_url
-                               poster_url = video_element.get_attribute('poster')
-                               if poster_url:
-                                   ad_data["thumbnail_url"] = poster_url
-                        except NoSuchElementException:
-                            # If no video, try image with more specific targeting
-                            try:
-                                img_element = link_container.find_element(By.XPATH, './/img[contains(@class, "x168nmei") or contains(@class, "_8nqq")]')
-                                media_url = img_element.get_attribute('src')
+                            # Try to find video by class name first (most reliable)
+                            video_element = child_div.find_element(By.CSS_SELECTOR, 'video.x1lliihq.x5yr21d.xh8yej3')
+                            
+                            if video_element:
+                                # Extract video URL
+                                media_url = video_element.get_attribute('src')
                                 if media_url:
-                                    ad_data["media_type"] = "image"
+                                    ad_data["media_type"] = "video"
                                     ad_data["media_url"] = media_url
-                            except NoSuchElementException:
-                                # Fallback to any image within the link container
-                                try:
-                                    img_element = link_container.find_element(By.XPATH, './/img')
-                                    media_url = img_element.get_attribute('src')
-                                    if media_url:
-                                        ad_data["media_type"] = "image"
-                                        ad_data["media_url"] = media_url
-                                except NoSuchElementException:
-                                    pass  # No media found
+                                    
+                                    # Extract thumbnail URL (poster attribute)
+                                    thumbnail_url = video_element.get_attribute('poster')
+                                    if thumbnail_url:
+                                        ad_data["thumbnail_url"] = thumbnail_url
+                                    video_found = True
+                        except NoSuchElementException:
+                            # Video not found, will try images next
+                            pass
+                        except Exception as e:
+                            custom_print(f"Error processing video: {str(e)}")
+                        
+                        # Only try to find images if no video was found
+                        if not video_found and (not ad_data.get("media_url") or not ad_data.get("media_type")):
+                            try:
+                                # First try with specific class names
+                                img_elements = link_container.find_elements(By.XPATH, './/img[contains(@class, "x168nmei") or contains(@class, "_8nqq")]')
+                                
+                                # If no images found with specific classes, try any image
+                                if not img_elements:
+                                    img_elements = link_container.find_elements(By.TAG_NAME, 'img')
+                                
+                                # Use the first valid image found
+                                for img in img_elements:
+                                    try:
+                                        media_url = img.get_attribute('src')
+                                        if media_url and media_url.strip():
+                                            ad_data["media_type"] = "image"
+                                            ad_data["media_url"] = media_url
+                                            break  # Use the first valid image
+                                    except Exception as e:
+                                        continue
+                                        
+                            except Exception as e:
+                                custom_print(f"Error finding images: {str(e)}")
                         
                         # Extract CTA Button text - look within the same link container first
                         try:
