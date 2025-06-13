@@ -2205,7 +2205,7 @@ for url in urls_to_process:
                         if not video_found and (not ad_data.get("media_url") or not ad_data.get("media_type")):
                             try:
                                 # First try with specific class names inside the primary link container
-                                img_elements = link_container.find_elements(By.XPATH, './/img[contains(@class, "x168nmei") or contains(@class, "_8nqq") or contains(@class, "x15mokao") or contains(@class, "x1ga7v0g") or contains(@class, "x16uus16") or contains(@class, "xbiv7yw") or contains(@class, "x1ll5gia") or contains(@class, "x19kjcj4") or contains(@class, "xh8yej3") ]')
+                                img_elements = link_container.find_elements(By.XPATH, './/img[contains(@class, "x168nmei") or contains(@class, "_8nqq") or contains(@class, "x15mokao") or contains(@class, "x1ga7v0g") or contains(@class, "x16uus16") or contains(@class, "xbiv7yw") or contains(@class, "x1ll5gia") or contains(@class, "x19kjcj4") or contains(@class, "x642log") or contains(@class, "xh8yej3") or @src]')
                                 
                                 # If no images found with specific classes, try any image in the link container
                                 if not img_elements:
