@@ -1534,8 +1534,8 @@ for url in urls_to_process:
     # Perform ultra-fast scrolling with minimal pauses
     scroll_count = improved_human_like_scroll(
         driver, 
-        scroll_pause_base=random.uniform(0.3, 0.8),  # Ultra-short pause time
-        max_scroll_attempts=4                         # Attempts at bottom
+        scroll_pause_base=random.uniform(0.5, 1.8),  # Ultra-short pause time
+        max_scroll_attempts=7                         # Attempts at bottom
     )
     
     custom_print(f"Completed {scroll_count} human-like scrolls")
