@@ -22,6 +22,7 @@ import os
 import sys
 import random
 from datetime import datetime
+from copy import deepcopy
 
 # Import anti-detection utilities
 from fb_antidetect_utils import (
@@ -101,7 +102,7 @@ def handle_popups(driver, wait=None):
                     popup_handled = True
                 else:
                     # If no OK button, look for close buttons
-                    close_buttons = driver.find_elements(By.XPATH, "//div[contains(@role, 'dialog')]//div[@aria-label='Close' or @aria-label='close' or @aria-label='Close dialog' or contains(@class, 'xjbqb8w')]")
+                    close_buttons = driver.find_elements(By.XPATH, "//div[contains(@role, 'dialog')]//div[@aria-label='Close' or @aria-label='close' or @aria-label='Close dialog']")
                     if close_buttons:
                         custom_print("Found Close button, clicking it", "info")
                         close_buttons[0].click()
@@ -124,9 +125,31 @@ def handle_popups(driver, wait=None):
                     buttons = driver.find_elements(By.XPATH, "//div[contains(@role, 'dialog')]//div[@role='button']")
                     if buttons:
                         custom_print(f"Found {len(buttons)} buttons in popup, clicking the last one", "info")
-                        buttons[-1].click()  # Usually the OK/Confirm button is the last one
-                        time.sleep(random.uniform(0.5, 1.5))
-                        popup_handled = True
+                        # Attempt to click the button up to 3 times before giving up for this URL
+                        max_click_attempts = 3
+                        for attempt in range(1, max_click_attempts + 1):
+                            try:
+                                custom_print(f"Clicking last button in popup (attempt {attempt}/{max_click_attempts})", "info")
+                                buttons[-1].click()
+                                time.sleep(random.uniform(0.5, 1.0))
+                                popup_handled = True
+                                break  # success
+                            except Exception as click_err:
+                                custom_print(f"Popup click attempt {attempt} failed: {click_err}", "warning")
+                                if attempt == max_click_attempts:
+                                    custom_print("Max popup click attempts reached; will ignore this popup for current link.", "warning")
+                                    popup_handled = True
+                                    break  # stop checking this button list
+                                else:
+                                    time.sleep(0.5)  # tiny pause before retry
+                        if popup_handled:
+                            pass
+                        else:
+                            pass
+                    if popup_handled:
+                        pass
+                    else:
+                        pass
                 except Exception as e2:
                     custom_print(f"Alternative button click failed: {str(e2)}", "error")
         
@@ -186,17 +209,59 @@ def handle_popups(driver, wait=None):
                                 for button in buttons:
                                     if button.text.lower() in ['ok', 'okay', 'continue', 'close', 'got it', 'accept']:
                                         custom_print(f"Clicking button with text: {button.text}", "info")
-                                        button.click()
-                                        time.sleep(random.uniform(0.5, 1.0))
-                                        popup_handled = True
-                                        break
-                                
+                                        # Attempt to click the button up to 3 times before giving up for this URL
+                                        max_click_attempts = 3
+                                        for attempt in range(1, max_click_attempts + 1):
+                                            try:
+                                                custom_print(f"Clicking button in popup container (attempt {attempt}/{max_click_attempts})", "info")
+                                                button.click()
+                                                time.sleep(random.uniform(0.5, 1.0))
+                                                popup_handled = True
+                                                break  # success
+                                            except Exception as click_err:
+                                                custom_print(f"Popup click attempt {attempt} failed: {click_err}", "warning")
+                                                if attempt == max_click_attempts:
+                                                    custom_print("Max popup click attempts reached; will ignore this popup for current link.", "warning")
+                                                    popup_handled = True
+                                                    break  # stop checking this button list
+                                                else:
+                                                    time.sleep(0.5)  # tiny pause before retry
+                                        if popup_handled:
+                                            pass
+                                        else:
+                                            pass
+                                    if popup_handled:
+                                        pass
+                                    else:
+                                        pass
                                 # If no text match, click the last button (often OK/Continue)
                                 if not popup_handled and buttons:
                                     custom_print("Clicking last button in container", "info")
-                                    buttons[-1].click()
-                                    time.sleep(random.uniform(0.5, 1.0))
-                                    popup_handled = True
+                                    # Attempt to click the button up to 3 times before giving up for this URL
+                                    max_click_attempts = 3
+                                    for attempt in range(1, max_click_attempts + 1):
+                                        try:
+                                            custom_print(f"Clicking last button in popup container (attempt {attempt}/{max_click_attempts})", "info")
+                                            buttons[-1].click()
+                                            time.sleep(random.uniform(0.5, 1.0))
+                                            popup_handled = True
+                                            break  # success
+                                        except Exception as click_err:
+                                            custom_print(f"Popup click attempt {attempt} failed: {click_err}", "warning")
+                                            if attempt == max_click_attempts:
+                                                custom_print("Max popup click attempts reached; will ignore this popup for current link.", "warning")
+                                                popup_handled = True
+                                                break  # stop checking this button list
+                                            else:
+                                                time.sleep(0.5)  # tiny pause before retry
+                                    if popup_handled:
+                                        pass
+                                    else:
+                                        pass
+                                if popup_handled:
+                                    pass
+                                else:
+                                    pass
                         except Exception as e:
                             custom_print(f"Error with popup container buttons: {str(e)}", "warning")
         
@@ -349,6 +414,65 @@ def setup_google_sheets(sheet_name="Master Auto Swipe - Test ankur", worksheet_n
         custom_print(f"Error connecting to Google Sheets: {e}")
         return None
 
+# Function to extract transparency URLs from Milk worksheet
+def extract_transparency_urls(worksheet):
+    """Extract Page Transparency URLs from the Milk worksheet"""
+    if not worksheet:
+        custom_print("Invalid worksheet provided", "error")
+        return [], {}
+        
+    try:
+        # Get all headers (first row)
+        headers = worksheet.row_values(1)
+        custom_print(f"Found headers in Milk worksheet: {headers}")
+        
+        # Find relevant column indices
+        page_col_idx = None
+        transparency_col_idx = None
+        
+        for i, header in enumerate(headers):
+            # Check for exact matches including trailing spaces
+            if header == "Page " or header == "Page":
+                page_col_idx = i + 1  # gspread is 1-indexed
+                custom_print(f"Found Page column at index {page_col_idx}: '{header}'")
+            
+            # Check for Page Transparency with possible typos
+            if header.lower().strip() in ["page transperancy", "page transperancy ", "page transparency"]:
+                transparency_col_idx = i + 1  # gspread is 1-indexed
+                custom_print(f"Found Page Transparency column at index {transparency_col_idx}: '{header}'")
+        
+        if not page_col_idx or not transparency_col_idx:
+            custom_print("Could not find required columns in the Milk worksheet!", "warning")
+            return [], {}
+            
+        # Get all records with transparency links
+        all_values = worksheet.get_all_values()
+        urls = []
+        url_row_mapping = {}
+        
+        # Use an ordered dictionary to maintain the exact order of URLs by row number
+        ordered_url_mapping = {}
+        for row_idx, row in enumerate(all_values[1:], 2):  # Start at row 2 (1-indexed)
+            # Only proceed if we have valid data in the transparency column
+            if len(row) >= transparency_col_idx:
+                transparency_url = row[transparency_col_idx - 1].strip()  # Convert to 0-indexed
+                
+                if transparency_url and transparency_url.startswith("http"):
+                    # Store with row_idx as key to maintain order
+                    ordered_url_mapping[row_idx] = transparency_url
+                    url_row_mapping[transparency_url] = row_idx
+        
+        # Extract URLs in strict row order
+        sorted_rows = sorted(ordered_url_mapping.keys())  # Sort row indices numerically
+        urls = [ordered_url_mapping[row] for row in sorted_rows]  # Get URLs in row order
+        
+        custom_print(f"Extracted {len(urls)} Page Transparency URLs from worksheet")
+        return urls, url_row_mapping, page_col_idx, transparency_col_idx
+        
+    except Exception as e:
+        custom_print(f"Error extracting URLs from worksheet: {e}", "error")
+        return [], {}, None, None
+
 # Function to extract URLs from Milk worksheet
 def extract_urls_from_milk_worksheet(worksheet):
     """Extract URLs and page names from the Milk worksheet"""
@@ -378,7 +502,7 @@ def extract_urls_from_milk_worksheet(worksheet):
             # Fallback to case-insensitive matching if needed
             elif header.lower().strip() in ["page transperancy", "page transparency"]:
                 transperancy_col_idx = i + 1  # gspread is 1-indexed
-                custom_print(f"Found Page Transperancy column at index {transperancy_col_idx} via fallback: '{header}'")
+                custom_print(f"Found Page Transperancy column via fallback at index {transperancy_col_idx} via fallback: '{header}'")
         
         if not page_col_idx or not transperancy_col_idx:
             custom_print("Could not find required columns in the Milk worksheet!", "warning")
@@ -390,7 +514,7 @@ def extract_urls_from_milk_worksheet(worksheet):
         page_names = {}
         
         # Skip header row
-        for row in all_values[1:]:
+        for row_idx, row in enumerate(all_values[1:], start=2):  # Start from row 2 (1-indexed)
             # Only proceed if we have valid data in both columns
             if len(row) >= max(page_col_idx, transperancy_col_idx):
                 page_name = row[page_col_idx - 1].strip()  # Convert to 0-indexed
@@ -406,6 +530,14 @@ def extract_urls_from_milk_worksheet(worksheet):
                             # Also store the page name
                             page_names[ad_library_url] = page_name
                             custom_print(f"Extracted Ad Library URL for {page_name}: {ad_library_url}")
+                            # Persist the converted URL back to the Milk sheet so that the
+                            # column always shows a complete Ad Library link, even when the
+                            # original transparency link lacked a page_id.
+                            try:
+                                worksheet.update_cell(row_idx, transperancy_col_idx, ad_library_url)
+                                custom_print(f"Updated Milk sheet row {row_idx}, column {transperancy_col_idx} with Ad Library URL")
+                            except Exception as e:
+                                custom_print(f"Error updating Milk sheet with Ad Library URL: {e}", "warning")
                     else:
                         # Already an ad library URL
                         urls.append(transparency_url)
@@ -419,69 +551,34 @@ def extract_urls_from_milk_worksheet(worksheet):
         custom_print(f"Error extracting URLs from Milk worksheet: {e}", "error")
         return [], {}
 
-# Function to convert transparency URL to ad library URL
-def convert_to_ad_library_url(transparency_url):
-    """Convert a Facebook transparency URL or search URL to an Ad Library URL"""
+# Function to extract search term from URL
+def extract_search_term(url):
+    """Extract search term from Facebook search URL"""
     try:
-        # Handle search-based URLs
-        if "search_type=keyword_unordered" in transparency_url:
-            # Parse the URL to extract parameters
-            from urllib.parse import urlparse, parse_qs, urlunparse, urlencode
-            
-            # Parse the URL and query parameters
-            parsed = urlparse(transparency_url)
-            params = parse_qs(parsed.query)
-            
-            # Ensure required parameters exist
-            if 'q' not in params:
-                custom_print(f"Search URL missing required 'q' parameter: {transparency_url}", "warning")
-                return None
-                
-            # Build the base URL with required parameters
-            base_params = {
-                'active_status': 'active',
-                'ad_type': 'all',
-                'country': 'US',  # Default to US, will be overridden if in URL
-                'media_type': 'all',
-                'search_type': 'keyword_unordered',
-                'q': params['q'][0]  # The search term
-            }
-            
-            # Add optional parameters if they exist
-            for param in ['country', 'is_targeted_country']:
-                if param in params:
-                    base_params[param] = params[param][0]
-            
-            # Rebuild the URL
-            new_url = urlunparse((
-                parsed.scheme,
-                parsed.netloc,
-                parsed.path,
-                parsed.params,
-                urlencode(base_params, doseq=True),
-                parsed.fragment
-            ))
-            
-            return new_url
-            
-        # Handle existing Ad Library URLs
-        if "facebook.com/ads/library" in transparency_url:
-            return transparency_url
-        
-        # Handle page transparency URLs
-        if "/page_transparency/?page_id=" in transparency_url:
-            page_id = transparency_url.split("/page_transparency/?page_id=")[1].split("&")[0]
-            return f"https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=ALL&view_all_page_id={page_id}&sort_data[direction]=desc&sort_data[mode]=relevancy_monthly_grouped"
-            
-        custom_print(f"Unsupported URL format: {transparency_url}", "warning")
-        return None
+        from urllib.parse import parse_qs, urlparse
+        parsed = urlparse(url)
+        query_params = parse_qs(parsed.query)
+        return query_params.get('q', [''])[0]
     except Exception as e:
-        custom_print(f"Error converting URL {transparency_url}: {e}", "error")
+        custom_print(f"Error extracting search term from URL: {e}", "error")
         return None
 
 # Connect to Google Sheets
 custom_print("Connecting to Google Sheets...")
 sheet_name = "Master Auto Swipe - Test ankur"
+
+# Set up Milk worksheet connection for transparency URLs
+custom_print("Setting up connection to Milk worksheet...")
+milk_worksheet = setup_google_sheets(sheet_name=sheet_name, worksheet_name="Milk")
+
+# Extract transparency URLs from Milk worksheet
+transparency_urls, url_row_mapping, page_col_idx, transparency_col_idx = extract_transparency_urls(milk_worksheet)
+
+if not transparency_urls:
+    custom_print("No transparency URLs found in Milk worksheet. Exiting.", "error")
+    sys.exit(1)
+
+custom_print(f"Found {len(transparency_urls)} transparency URLs to process")
 
 # Get utility functions from the anti-detection utils module
 from fb_antidetect_utils import ProxyManager, get_current_ip
@@ -569,12 +666,7 @@ if milk_worksheet:
     if not urls:
         custom_print("No URLs found in the Milk worksheet. Using a default URL...")
         # Set default URL as fallback
-        urls = ["https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=ALL&is_targeted_country=false&media_type=all&search_type=page&source=page-transparency-widget&view_all_page_id=109760815561056"]
-else:
-    custom_print("Could not connect to Milk worksheet. Using a default URL...")
-    # Set default URL as fallback - Using the user's specific URL
-    urls = ["https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=US&is_targeted_country=false&media_type=all&search_type=page&view_all_page_id=456998304158696"]
-
+      
 # Initialize a dictionary to collect all ads data
 all_ads_data = {}
 
@@ -595,8 +687,27 @@ def clean_url(url):
         return ""
     return str(url).strip()
 
-# Load previously processed URLs from file if it exists
+# Load previously processed transparency URLs from file if it exists
+processed_transparency_urls_file = "processed_transparency_urls.txt"
 previously_processed_urls_from_file = set()
+
+# Load previously processed URLs
+if os.path.exists(processed_transparency_urls_file):
+    try:
+        with open(processed_transparency_urls_file, 'r') as f:
+            previously_processed_urls_from_file = {line.strip() for line in f if line.strip()}
+        custom_print(f"Loaded {len(previously_processed_urls_from_file)} previously processed transparency URLs")
+    except Exception as e:
+        custom_print(f"Error loading processed transparency URLs: {e}", "error")
+
+# Filter out already processed URLs
+urls_to_process = [url for url in transparency_urls if url not in previously_processed_urls_from_file]
+
+if not urls_to_process:
+    custom_print("All transparency URLs have already been processed. Exiting.", "info")
+    sys.exit(0)
+
+custom_print(f"Found {len(urls_to_process)} new transparency URLs to process")
 try:
     if os.path.exists(processed_urls_file) and not force_reprocess:
         with open(processed_urls_file, 'r') as f:
@@ -650,10 +761,11 @@ def save_processed_url(url):
         return False
 
 # Initialize progress tracking
-total_urls = len(urls)
+total_urls = len(urls_to_process)
 def update_progress_percentage():
     if total_urls > 0:
-        progress_percentage = (len(processed_urls) / total_urls) * 100
+        current_index = min(len(processed_urls) + 1, total_urls)
+        progress_percentage = (current_index / total_urls) * 100
         # Format with GitHub Actions-friendly output that's easy to spot in logs
         # Use simple ASCII characters for progress bar to avoid encoding issues
         progress_bar = f"[{'#' * int(progress_percentage / 2)}{'-' * (50 - int(progress_percentage / 2))}] {progress_percentage:.1f}%"
@@ -663,11 +775,11 @@ def update_progress_percentage():
         
         if running_from_master:
             # When running from master script, simplified output for central display
-            print(f"PROGRESS [Ad_details_scraper]: {progress_bar} ({len(processed_urls)}/{total_urls} URLs)")
+            print(f"PROGRESS [Ad_details_scraper]: {progress_bar} ({current_index}/{total_urls} URLs)")
             sys.stdout.flush()
         else:
             # When running standalone, use a simpler format that's still clear
-            print(f"\nPROGRESS [Ad_details_scraper]: {progress_percentage:.1f}% ({len(processed_urls)}/{total_urls} URLs)\n{progress_bar}")
+            print(f"\nPROGRESS [Ad_details_scraper]: {progress_percentage:.1f}% ({current_index}/{total_urls} URLs)\n{progress_bar}")
             
         # This ensures the progress is visible in GitHub Actions logs
         sys.stdout.flush()
@@ -795,11 +907,23 @@ for url_info in reprocessing_needed:
     url, row_idx, page_id = url_info
     url_to_row_mapping[url] = row_idx
 
-while len(processed_urls) < len(urls):
-    # Randomly select a URL that hasn't been processed yet
-    remaining_urls = [u for u in urls if u not in processed_urls]
-    url = random.choice(remaining_urls)
+# Process transparency URLs one by one
+for url in urls_to_process:
+    custom_print(f"\nProcessing transparency URL: {url}")
     url_index += 1
+    
+    # Mark as processed at the start to handle retries
+    if url not in previously_processed_urls_from_file:
+        try:
+            with open(processed_transparency_urls_file, 'a') as f:
+                f.write(f"{url}\n")
+            previously_processed_urls_from_file.add(url)
+        except Exception as e:
+            custom_print(f"Error saving processed URL: {e}", "error")
+    
+    # Set up tracking for this URL
+    processed_urls.add(url)
+    should_skip_url = False
     
     # Track the milk sheet row for this URL if we know it
     current_milk_row = url_to_row_mapping.get(url, None)
@@ -1145,32 +1269,54 @@ while len(processed_urls) < len(urls):
                             custom_print(f"Found URL column at index {url_col_index}")
                             break
                     
+                    # First try exact URL match
                     if url_col_index:
-                        # Get all values in the URL column
                         url_values = milk_worksheet.col_values(url_col_index)
-                        
-                        # Look for a row that contains this exact URL
                         for i, cell_url in enumerate(url_values):
                             if cell_url.strip() == url.strip():
-                                row_index = i + 1  # 1-indexed
-                                custom_print(f"Found matching URL in Milk worksheet at row {row_index}")
+                                row_index = i + 1
+                                custom_print(f"Found exact URL match in Milk worksheet at row {row_index}")
                                 break
                     
-                    # If no match by URL, try matching by page_id as a fallback
-                    if not row_index and 'page_transperancy' in milk_column_indices and 'page_id' in url_params:
-                        # Get all values in the Page Transperancy column
+                    # If no exact match, check if it's a search URL and try to match by search term
+                    if not row_index and "search_type=keyword_unordered" in url:
+                        search_term = extract_search_term(url)
+                        if search_term:
+                            custom_print(f"Searching for term: {search_term} in Milk sheet...")
+                            # Check in Page Transparency column first
+                            if 'page_transperancy' in milk_column_indices:
+                                page_trans_values = milk_worksheet.col_values(milk_column_indices['page_transperancy'])
+                                for i, cell_value in enumerate(page_trans_values):
+                                    if search_term.lower() in cell_value.lower():
+                                        row_index = i + 1
+                                        custom_print(f"Matched search term in Page Transparency at row {row_index}")
+                                        break
+                            
+                            # If still no match, check in URL column
+                            if not row_index and url_col_index:
+                                url_values = milk_worksheet.col_values(url_col_index)
+                                for i, cell_value in enumerate(url_values):
+                                    if search_term.lower() in cell_value.lower():
+                                        row_index = i + 1
+                                        custom_print(f"Matched search term in URL column at row {row_index}")
+                                        break
+                    
+                    # If still no match, try direct URL matching in Page Transparency column
+                    if not row_index and 'page_transperancy' in milk_column_indices:
                         page_trans_values = milk_worksheet.col_values(milk_column_indices['page_transperancy'])
-                        
-                        # Look for a row that contains this page_id
+                        for i, cell_value in enumerate(page_trans_values):
+                            if url.strip() in cell_value.strip():
+                                row_index = i + 1
+                                custom_print(f"Matched URL in Page Transparency column at row {row_index}")
+                                break
+                    
+                    # Last resort: try matching by page_id if available
+                    if not row_index and 'page_transperancy' in milk_column_indices and 'page_id' in url_params:
+                        page_trans_values = milk_worksheet.col_values(milk_column_indices['page_transperancy'])
                         for i, cell_value in enumerate(page_trans_values):
                             if url_params['page_id'] in cell_value:
-                                row_index = i + 1  # 1-indexed
-                                custom_print(f"Found matching page_id in Milk worksheet at row {row_index}")
-                                
-                                # If we found it by page_id but not URL, update the URL column
-                                if url_col_index:
-                                    milk_worksheet.update_cell(row_index, url_col_index, url)
-                                    custom_print(f"Updated URL column at row {row_index} with current URL")
+                                row_index = i + 1
+                                custom_print(f"Matched page_id in Milk worksheet at row {row_index}")
                                 break
                 
                 if row_index:
@@ -1254,17 +1400,15 @@ while len(processed_urls) < len(urls):
             except Exception as e:
                 custom_print(f"Error updating Milk worksheet for zero ads case: {e}", "error")
         
-        # Add this URL to processed_urls and continue to the next URL
-        processed_urls.add(url)
-        # Also save to persistent file
-        save_processed_url(url)
-        # Update progress after adding to processed_urls
+        # Already marked as processed at the start
+        # Update progress
         update_progress_percentage()
         continue
         
     # Check if this URL should be skipped (was already processed)
     if should_skip_url:
         custom_print(f"Skipping URL {url} as it was already processed")
+        update_progress_percentage()
         continue
     
     # Define variable for storing ad data from this URL
@@ -1455,362 +1599,6 @@ while len(processed_urls) < len(urls):
     except Exception as e:
         custom_print(f"Error extracting URL parameters: {e}", "error")
     
-    # Initialize should_skip_url flag
-    should_skip_url = False
-    
-    # If ad_count is 0, update the Milk sheet and skip to the next URL without scrolling
-    if ad_count == 0 or ad_count is None:
-        custom_print("No ads found (count is 0). Updating Milk sheet and skipping to next URL...")
-        
-        # Update the Milk worksheet with the ad count, timestamp, and IP address
-        if milk_worksheet:
-            try:
-                # Get the current headers to find column indices
-                milk_headers = milk_worksheet.row_values(1)
-                milk_column_indices = {}
-                
-                # Find the necessary column indices - account for trailing spaces in column names
-                for i, header in enumerate(milk_headers):
-                    # Check for 'no.of ads By Ai' column (exact match with spaces)
-                    if header == "no.of ads By Ai":
-                        milk_column_indices['ads_by_ai'] = i + 1  # 1-indexed
-                        custom_print(f"Found 'no.of ads By Ai' column at index {milk_column_indices['ads_by_ai']}")
-                    
-                    # Check for Last Update Time column
-                    if header == "Last Update Time" or header.lower().strip() == "last update time":
-                        milk_column_indices['last_update'] = i + 1  # 1-indexed
-                        custom_print(f"Found 'Last Update Time' column at index {milk_column_indices['last_update']}")
-                    
-                    # Check for IP Address column
-                    if header == "IP Address" or header.lower().strip() == "ip address":
-                        milk_column_indices['ip_address'] = i + 1  # 1-indexed
-                        custom_print(f"Found 'IP Address' column at index {milk_column_indices['ip_address']}")
-                    
-                    # Find Page Transperancy column for matching - handle spaces in column name
-                    if header == "Page Transperancy " or header == "Page Transperancy":
-                        milk_column_indices['page_transperancy'] = i + 1  # 1-indexed
-                        custom_print(f"Found 'Page Transperancy' column at index {milk_column_indices['page_transperancy']}")
-                    elif header.lower().strip() in ["page transperancy", "page transparency"]:
-                        milk_column_indices['page_transperancy'] = i + 1  # 1-indexed
-                        custom_print(f"Found 'Page Transperancy' column via fallback at index {milk_column_indices['page_transperancy']}")
-                    
-                # Also find URL column to check for existing URLs
-                url_col_index = None
-                for i, header in enumerate(milk_headers):
-                    if header.lower().strip() in ["ad url", "url", "ad library url"]:
-                        url_col_index = i + 1  # 1-indexed
-                        custom_print(f"Found URL column at index {url_col_index}")
-                        break
-                
-                # Check if this URL has already been processed (has Last Update Time)
-                if url_col_index and 'last_update' in milk_column_indices:
-                    # Get all URLs
-                    url_values = milk_worksheet.col_values(url_col_index)
-                    
-                    # Get all Last Update Time values
-                    last_update_values = milk_worksheet.col_values(milk_column_indices['last_update'])
-                    
-                    # Look for a row that contains this exact URL and has a Last Update Time
-                    for i, cell_url in enumerate(url_values):
-                        if i > 0 and i < len(last_update_values) and cell_url.strip() == url.strip():
-                            if last_update_values[i].strip():
-                                custom_print(f"This URL was already processed on {last_update_values[i]}")
-                                custom_print("Skipping this URL as it has already been processed...")
-                                
-                                # Flag that this URL should be skipped
-                                should_skip_url = True
-                                # Add to processed URLs for progress tracking
-                                processed_urls.add(url)
-                                update_progress_percentage()
-                                break
-                
-                # Add any missing columns to Milk worksheet
-                if 'ads_by_ai' not in milk_column_indices:
-                    next_col = len(milk_headers) + 1
-                    milk_worksheet.update_cell(1, next_col, "no.of ads By Ai")
-                    milk_column_indices['ads_by_ai'] = next_col
-                    custom_print(f"Added 'no.of ads By Ai' column at index {next_col}")
-                
-                if 'last_update' not in milk_column_indices:
-                    next_col = len(milk_headers) + 1
-                    milk_worksheet.update_cell(1, next_col, "Last Update Time")
-                    milk_column_indices['last_update'] = next_col
-                    custom_print(f"Added 'Last Update Time' column at index {next_col}")
-                
-                if 'ip_address' not in milk_column_indices:
-                    next_col = len(milk_headers) + 1
-                    milk_worksheet.update_cell(1, next_col, "IP Address")
-                    milk_column_indices['ip_address'] = next_col
-                    custom_print(f"Added 'IP Address' column at index {next_col}")
-                
-                # Find the matching row in Milk worksheet for this URL
-                row_index = None
-                
-                # First, check if we already know which row this URL corresponds to
-                if current_milk_row:
-                    row_index = current_milk_row
-                    custom_print(f"Using known row {row_index} for this URL from earlier processing")
-                else:
-                    # Try to find URL column and match directly by URL
-                    url_col_index = None
-                    for i, header in enumerate(milk_headers):
-                        if header.lower().strip() in ["ad url", "url", "ad library url"]:
-                            url_col_index = i + 1  # 1-indexed
-                            custom_print(f"Found URL column at index {url_col_index}")
-                            break
-                    
-                    if url_col_index:
-                        # Get all values in the URL column
-                        url_values = milk_worksheet.col_values(url_col_index)
-                        
-                        # Look for a row that contains this exact URL
-                        for i, cell_url in enumerate(url_values):
-                            if cell_url.strip() == url.strip():
-                                row_index = i + 1  # 1-indexed
-                                custom_print(f"Found matching URL in Milk worksheet at row {row_index}")
-                                break
-                    
-                    # If no match by URL, try matching by page_id as a fallback
-                    if not row_index and 'page_transperancy' in milk_column_indices and 'page_id' in url_params:
-                        # Get all values in the Page Transperancy column
-                        page_trans_values = milk_worksheet.col_values(milk_column_indices['page_transperancy'])
-                        
-                        # Look for a row that contains this page_id
-                        for i, cell_value in enumerate(page_trans_values):
-                            if url_params['page_id'] in cell_value:
-                                row_index = i + 1  # 1-indexed
-                                custom_print(f"Found matching page_id in Milk worksheet at row {row_index}")
-                                
-                                # If we found it by page_id but not URL, update the URL column
-                                if url_col_index:
-                                    milk_worksheet.update_cell(row_index, url_col_index, url)
-                                    custom_print(f"Updated URL column at row {row_index} with current URL")
-                                break
-                
-                if row_index:
-                    # Get current timestamp
-                    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    
-                    # Update the no.of ads By Ai column - extract only the number
-                    if 'ads_by_ai' in milk_column_indices:
-                        # If ad_count is found, use it, otherwise use 0
-                        value_to_update = str(ad_count) if ad_count is not None else '0'
-                        milk_worksheet.update_cell(row_index, milk_column_indices['ads_by_ai'], value_to_update)
-                        custom_print(f"Updated 'no.of ads By Ai' column with value: {value_to_update}")
-                    
-                    # Update the Last Update Time column
-                    if 'last_update' in milk_column_indices:
-                        milk_worksheet.update_cell(row_index, milk_column_indices['last_update'], current_time)
-                        custom_print(f"Updated 'Last Update Time' column with value: {current_time}")
-                    
-                    # Update the IP Address column
-                    if 'ip_address' in milk_column_indices:
-                        milk_worksheet.update_cell(row_index, milk_column_indices['ip_address'], current_ip)
-                        custom_print(f"Updated 'IP Address' column with value: {current_ip}")
-                    
-                    # Update the same columns in the Ads Details worksheet if needed
-                    if ads_details_worksheet:
-                        try:
-                            # Get the headers from Ads Details worksheet
-                            ads_headers = ads_details_worksheet.row_values(1)
-                            ads_column_indices = {}
-                            
-                            # Find the necessary column indices
-                            for i, header in enumerate(ads_headers):
-                                # Check for Last Update Time column
-                                if header == "Last Update Time" or header.lower().strip() == "last update time":
-                                    ads_column_indices['last_update'] = i + 1  # 1-indexed
-                                    custom_print(f"Found 'Last Update Time' column in Ads Details at index {ads_column_indices['last_update']}")
-                                
-                                # Check for IP Address column
-                                if header == "IP Address" or header.lower().strip() == "ip address":
-                                    ads_column_indices['ip_address'] = i + 1  # 1-indexed
-                                    custom_print(f"Found 'IP Address' column in Ads Details at index {ads_column_indices['ip_address']}")
-                            
-                            # Find all rows in Ads Details worksheet that match this page_id
-                            if 'page_id' in url_params:
-                                # Update all matching rows in Ads Details worksheet
-                                try:
-                                    # Find column with Page ID or similar in Ads Details
-                                    page_id_col_index = None
-                                    for i, header in enumerate(ads_headers):
-                                        if "page id" in header.lower() or "pageid" in header.lower().replace(" ", ""):
-                                            page_id_col_index = i + 1  # 1-indexed
-                                            custom_print(f"Found Page ID column in Ads Details at index {page_id_col_index}")
-                                            break
-                                    
-                                    if page_id_col_index:
-                                        # Get all Page ID values
-                                        page_id_values = ads_details_worksheet.col_values(page_id_col_index)
-                                        
-                                        # Find rows with matching page_id
-                                        matching_rows = []
-                                        for i, cell_value in enumerate(page_id_values):
-                                            if str(url_params['page_id']) in str(cell_value):
-                                                matching_rows.append(i + 1)  # 1-indexed
-                                        
-                                        custom_print(f"Found {len(matching_rows)} matching rows in Ads Details worksheet")
-                                        
-                                        # Update Last Update Time and IP Address for all matching rows
-                                        for row_idx in matching_rows:
-                                            if 'last_update' in ads_column_indices:
-                                                ads_details_worksheet.update_cell(row_idx, ads_column_indices['last_update'], current_time)
-                                            
-                                            if 'ip_address' in ads_column_indices:
-                                                ads_details_worksheet.update_cell(row_idx, ads_column_indices['ip_address'], current_ip)
-                                    
-                                except Exception as e:
-                                    custom_print(f"Error updating Ads Details worksheet for zero ads case: {e}", "error")
-                        except Exception as e:
-                            custom_print(f"Error working with Ads Details worksheet for zero ads case: {e}", "error")
-                else:
-                    custom_print(f"Could not find matching row in Milk worksheet for page_id: {url_params.get('page_id', 'unknown')}", "warning")
-            except Exception as e:
-                custom_print(f"Error updating Milk worksheet for zero ads case: {e}", "error")
-        
-        # Add this URL to processed_urls and continue to the next URL
-        processed_urls.add(url)
-        # Also save to persistent file
-        save_processed_url(url)
-        # Update progress after adding to processed_urls
-        update_progress_percentage()
-        continue
-        
-    # Check if this URL should be skipped (was already processed)
-    if should_skip_url:
-        custom_print(f"Skipping URL {url} as it was already processed")
-        continue
-    
-    # Define variable for storing ad data from this URL
-    ads_data = {}
-    
-    # Start scrolling to load content with human-like behavior since ads were found
-    custom_print(f"Found {ad_count} ads. Starting human-like scrolling to load content...")
-    
-    # Initialize vars needed for our special end-of-results detection
-    element_found = False
-    
-    # Only occasionally simulate minimal mouse movements before scrolling
-    if random.random() < 0.15:  # 15% chance of brief pause
-        custom_print("Performing minimal random mouse movements...")
-        simulate_random_mouse_movements(driver, num_movements=random.randint(1, 3))
-    else:
-        custom_print("Skipping initial mouse movements to save time...")
-    
-    # Add a minimal random delay before starting to scroll
-    delay = add_random_delays(0.2, 0.6)
-    custom_print(f"Waiting {delay:.2f} seconds before starting to scroll...")
-    
-    # Perform ultra-fast scrolling with minimal pauses
-    scroll_count = improved_human_like_scroll(
-        driver, 
-        scroll_pause_base=random.uniform(0.3, 0.8),  # Ultra-short pause time
-        max_scroll_attempts=4                         # Attempts at bottom
-    )
-    
-    custom_print(f"Completed {scroll_count} human-like scrolls")
-    
-    # Check if we've reached the end of results using various possible end-of-results messages
-    try:
-        # Look for "End of results" text
-        end_divs = driver.find_elements(By.XPATH, "//div[contains(text(), 'End of results')]")
-        element_found = len(end_divs) > 0
-        
-        if not element_found:
-            # Also check for "We couldn't find any more results"
-            alt_end_divs = driver.find_elements(By.XPATH, "//div[contains(text(), 'We couldn')]/span[contains(text(), 'find any more results')]")
-            element_found = len(alt_end_divs) > 0
-            
-            if not element_found:
-                # Try another possible end message format
-                try:
-                    alt_end_divs_2 = driver.find_elements(By.XPATH, "//div[contains(@class, 'xu06os2')]/span[contains(text(), 'End of results')]")
-                    element_found = len(alt_end_divs_2) > 0
-                except (NoSuchElementException, TimeoutException):
-                    pass
-                    
-    except Exception as e:
-        custom_print(f"Error checking for end-of-results: {e}", "error")
-        
-    if element_found:
-        custom_print(f"✅ End-of-list element found after {scroll_count} scrolls. Stopping scroll.")
-        
-    # Safety limit check (separate from human-like scrolling function)
-    if scroll_count > 500: # Adjust limit as needed
-        custom_print("⚠️ Reached maximum scroll limit (500). Stopping scroll.")
-    
-    try:
-        # First try to find the element with role="heading" containing "results" with shorter timeout
-        try:
-            ad_count_element = WebDriverWait(driver, 3).until(
-                EC.presence_of_element_located((By.XPATH, "//div[@role='heading'][contains(text(), 'results') or contains(text(), 'result')]"))
-            )
-        except TimeoutException:
-            # Fall back to direct find without waiting
-            ad_count_element = driver.find_element(By.XPATH, "//div[@role='heading'][contains(text(), 'results') or contains(text(), 'result')]")
-        ad_count_text = ad_count_element.text.strip()
-        custom_print(f"Found ad count text: {ad_count_text}")
-        
-        # Extract the numeric part using regex
-        matches = re.search(r'~?(\d+(?:,\d+)?)', ad_count_text)
-        if matches:
-            # Remove commas and convert to int
-            ad_count = int(matches.group(1).replace(',', ''))
-            custom_print(f"Extracted ad count: {ad_count}")
-        else:
-            custom_print(f"Could not extract numeric ad count from: {ad_count_text}", "warning")
-    except (NoSuchElementException, TimeoutException):
-        # If the first method fails, try a more general approach
-        try:
-            ad_count_element = driver.find_element(By.XPATH, "//div[contains(text(), 'results') or contains(text(), 'result')]") 
-            ad_count_text = ad_count_element.text.strip()
-            custom_print(f"Found ad count text (alternate method): {ad_count_text}")
-            
-            # Extract the numeric part using regex
-            matches = re.search(r'~?(\d+(?:,\d+)?)', ad_count_text)
-            if matches:
-                # Remove commas and convert to int
-                ad_count = int(matches.group(1).replace(',', ''))
-                custom_print(f"Extracted ad count: {ad_count}")
-            else:
-                custom_print(f"Could not extract numeric ad count from: {ad_count_text}", "warning")
-        except NoSuchElementException:
-            # Try JavaScript as a last resort
-            try:
-                ad_count_text = driver.execute_script("""
-                    const elements = document.querySelectorAll('div');
-                    for (const el of elements) {
-                        const text = el.textContent.trim();
-                        if (text.includes('results') || text.includes('result')) {
-                            return text;
-                        }
-                    }
-                    return null;
-                """)
-                
-                if ad_count_text:
-                    custom_print(f"Found ad count text (JavaScript method): {ad_count_text}")
-                    matches = re.search(r'~?(\d+(?:,\d+)?)', ad_count_text)
-                    if matches:
-                        ad_count = int(matches.group(1).replace(',', ''))
-                        custom_print(f"JavaScript-extracted ad count: {ad_count}")
-            except Exception as js_error:
-                custom_print(f"JavaScript ad count extraction failed: {str(js_error)}", "warning")
-    except Exception as e:
-        custom_print(f"Error extracting ad count: {e}", "error")
-    
-    # Process URL parameters to get the page_id for tracking in the Milk sheet
-    url_params = {}
-    try:
-        # Extract page_id from URL
-        if "view_all_page_id=" in url:
-            page_id_match = re.search(r'view_all_page_id=(\d+)', url)
-            if page_id_match:
-                url_params['page_id'] = page_id_match.group(1)
-                custom_print(f"Extracted page_id from URL: {url_params['page_id']}")
-    except Exception as e:
-        custom_print(f"Error extracting URL parameters: {e}", "error")
-    
     # Update the Milk worksheet with the ad count, timestamp, and IP address
     if milk_worksheet:
         try:
@@ -1842,25 +1630,6 @@ while len(processed_urls) < len(urls):
                 elif header.lower().strip() in ["page transperancy", "page transparency"]:
                     milk_column_indices['page_transperancy'] = i + 1  # 1-indexed
                     custom_print(f"Found 'Page Transperancy' column via fallback at index {milk_column_indices['page_transperancy']}")
-            
-            # Add any missing columns to Milk worksheet
-            if 'ads_by_ai' not in milk_column_indices:
-                next_col = len(milk_headers) + 1
-                milk_worksheet.update_cell(1, next_col, "no.of ads By Ai")
-                milk_column_indices['ads_by_ai'] = next_col
-                custom_print(f"Added 'no.of ads By Ai' column at index {next_col}")
-            
-            if 'last_update' not in milk_column_indices:
-                next_col = len(milk_headers) + 1
-                milk_worksheet.update_cell(1, next_col, "Last Update Time")
-                milk_column_indices['last_update'] = next_col
-                custom_print(f"Added 'Last Update Time' column at index {next_col}")
-            
-            if 'ip_address' not in milk_column_indices:
-                next_col = len(milk_headers) + 1
-                milk_worksheet.update_cell(1, next_col, "IP Address")
-                milk_column_indices['ip_address'] = next_col
-                custom_print(f"Added 'IP Address' column at index {next_col}")
             
             # Find the matching row in Milk worksheet for this URL's page_id
             row_index = None
@@ -1945,6 +1714,9 @@ while len(processed_urls) < len(urls):
     custom_print("Adding random delay before processing ads to prevent detection...")
     add_random_delays(1.0, 2.0)  # Reduced delay
     
+    # Initialize set to track scraped ad links
+    scraped_ad_links = set()
+
     for i, div in enumerate(divs_2, 1):
         # Randomize processing pattern (sometimes add delay between ads to look more human)
         if random.random() < 0.1:  # 10% chance
@@ -2018,10 +1790,10 @@ while len(processed_urls) < len(urls):
                         # Don't worry if the hover fails, just continue
                         pass
                 try:
-                    main_container = child_div.find_element(By.XPATH, './/div[contains(@class, "x78zum5 xdt5ytf x2lwn1j xeuugli")]')
+                    main_container = child_div.find_element(By.XPATH, './/div[contains(@class, "x78zum5") and contains(@class, "xdt5ytf") and contains(@class, "x2lwn1j") and contains(@class, "xeuugli")]')
 
                     # Extract Library ID
-                    library_id_element = main_container.find_element(By.XPATH, './/div[contains(@class, "x1rg5ohu x67bb7w")]/span[contains(text(), "Library ID:")]')
+                    library_id_element = main_container.find_element(By.XPATH, './/div[contains(@class, "x1rg5ohu") and contains(@class, "x67bb7w")]/span[contains(text(), "Library ID:")]')
                     library_id = library_id_element.text.replace("Library ID: ", "").strip()
                     current_ad_id_for_logging = library_id # Update logging ID once found
 
@@ -2031,6 +1803,7 @@ while len(processed_urls) < len(urls):
 
                     # Initialize ad data with library_id
                     ad_data = {"library_id": library_id}
+                    skip_primary_insert = False
                     
                     # Check if we have a page name from the Milk worksheet for this URL
                     if url in page_names and page_names[url]:
@@ -2266,13 +2039,13 @@ while len(processed_urls) < len(urls):
                     except NoSuchElementException:
                         pass  # No categories section found
                     except Exception as e:
-                        print(f"Error extracting categories: {str(e)}")
+                         print(f"Error extracting categories: {str(e)}")
 
                     ad_data["categories"] = category_data
                     # Extract Ads count
                     try:
                         # Adjusted XPath to be more specific to the 'N ads use this creative and text.' structure
-                        ads_count_element = main_container.find_element(By.XPATH, './/div[contains(@class, "x6s0dn4 x78zum5 xsag5q8")]//strong')
+                        ads_count_element = main_container.find_element(By.XPATH, './/div[contains(@class, "x6s0dn4") and contains(@class, "x78zum5") and contains(@class, "xsag5q8")]//strong')
                         ads_count = ads_count_element.text.strip() # Should just be the number
                         number_match = re.search(r'(\d+)', ads_count)
                         if number_match:
@@ -2324,6 +2097,13 @@ while len(processed_urls) < len(urls):
                             # Try another method if u= isn't in the query params
                             actual_url = unquote(decoded_url.split('u=')[1].split('&')[0]) if 'u=' in decoded_url else decoded_url
                         
+                        # Check if ad link has already been scraped
+                        if decoded_url in scraped_ad_links:
+                            continue  # Skip duplicate ad link
+
+                        # Add to scraped ad links set
+                        scraped_ad_links.add(decoded_url)
+
                         # Store the full URL, not just the domain
                         ad_data["destination_url"] = actual_url
 
@@ -2360,14 +2140,14 @@ while len(processed_urls) < len(urls):
                         # Only try to find images if no video was found
                         if not video_found and (not ad_data.get("media_url") or not ad_data.get("media_type")):
                             try:
-                                # First try with specific class names
-                                img_elements = link_container.find_elements(By.XPATH, './/img[contains(@class, "x168nmei") or contains(@class, "_8nqq")]')
+                                # First try with specific class names inside the primary link container
+                                img_elements = link_container.find_elements(By.XPATH, './/img[contains(@class, "x168nmei") or contains(@class, "_8nqq") or contains(@class, "x15mokao") or contains(@class, "x1ga7v0g") or contains(@class, "x16uus16") or contains(@class, "xbiv7yw") or contains(@class, "x1ll5gia") or contains(@class, "x19kjcj4") or contains(@class, "xh8yej3") ]')
                                 
-                                # If no images found with specific classes, try any image
+                                # If no images found with specific classes, try any image in the link container
                                 if not img_elements:
                                     img_elements = link_container.find_elements(By.TAG_NAME, 'img')
                                 
-                                # Use the first valid image found
+                                # Use the first valid image found in the link container
                                 for img in img_elements:
                                     try:
                                         media_url = img.get_attribute('src')
@@ -2375,9 +2155,21 @@ while len(processed_urls) < len(urls):
                                             ad_data["media_type"] = "image"
                                             ad_data["media_url"] = media_url
                                             break  # Use the first valid image
-                                    except Exception as e:
+                                    except Exception:
                                         continue
-                                        
+                                
+                                # Additional fallback: search for images anywhere inside the ad block
+                                if not ad_data.get("media_url"):
+                                    fallback_img_elements = child_div.find_elements(By.XPATH, './/img[contains(@class, "x15mokao") or contains(@class, "x1ga7v0g") or contains(@class, "x16uus16") or contains(@class, "xbiv7yw") or contains(@class, "x1ll5gia") or contains(@class, "x19kjcj4") or contains(@class, "x642log") or contains(@class, "xh8yej3") or @src]')
+                                    for img in fallback_img_elements:
+                                        try:
+                                            media_url = img.get_attribute('src')
+                                            if media_url and media_url.strip():
+                                                ad_data["media_type"] = "image"
+                                                ad_data["media_url"] = media_url
+                                                break
+                                        except Exception:
+                                            continue
                             except Exception as e:
                                 custom_print(f"Error finding images: {str(e)}")
                         
@@ -2440,7 +2232,8 @@ while len(processed_urls) < len(urls):
                         ad_data["cta_button_text"] = None
 
                     # Add to main dictionary with library_id as key
-                    ads_data[library_id] = ad_data
+                    if not skip_primary_insert:
+                        ads_data[library_id] = ad_data
                     total_processed += 1
                     # Reduce console noise: print progress periodically instead of every ad
                     if total_processed % 50 == 0:
@@ -2459,7 +2252,7 @@ while len(processed_urls) < len(urls):
             continue
 
     # End of scrolling, now extract the data
-    custom_print(f"\nExtraction completed for URL {url_index}/{len(urls)}: Found {len(ads_data)} ads.")
+    custom_print(f"\nExtraction completed for URL {url_index}/{len(urls_to_process)}: Found {len(ads_data)} ads.")
     custom_print("Beginning data processing for Google Sheets update...")
     
     # Store data in memory (no need to create individual files)
@@ -2467,7 +2260,7 @@ while len(processed_urls) < len(urls):
 
     # Update the Ads Details worksheet with just this URL's data before moving to next URL
     if ads_worksheet and ads_data:
-        custom_print(f"Updating Ads Details worksheet with {len(ads_data)} ads from URL {url_index}/{len(urls)}...")
+        custom_print(f"Updating Ads Details worksheet with {len(ads_data)} ads from URL {url_index}/{len(urls_to_process)}...")
         
         # Get column indices if we don't have them already
         # Always get the headers to ensure they're defined
@@ -2767,7 +2560,7 @@ while len(processed_urls) < len(urls):
                 
                 # Append the rows
                 ads_worksheet.append_rows(rows_to_update)
-                custom_print(f"Successfully updated Google Sheet with {len(rows_to_update)} new ads from URL {url_index}/{len(urls)}.")
+                custom_print(f"Successfully updated Google Sheet with {len(rows_to_update)} new ads from URL {url_index}/{len(urls_to_process)}.")
             except Exception as e:
                 custom_print(f"Error updating Google Sheet: {e}")
                 # Fallback to cell-by-cell update if batch update fails
