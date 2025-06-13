@@ -436,10 +436,10 @@ def extract_transparency_urls(worksheet):
                 page_col_idx = i + 1  # gspread is 1-indexed
                 custom_print(f"Found Page column at index {page_col_idx}: '{header}'")
             
-            # Check for Page Transparency with possible typos
+            # Check for Page Transperancy with possible typos
             if header.lower().strip() in ["page transperancy", "page transperancy ", "page transparency"]:
                 transparency_col_idx = i + 1  # gspread is 1-indexed
-                custom_print(f"Found Page Transparency column at index {transparency_col_idx}: '{header}'")
+                custom_print(f"Found Page Transperancy column at index {transparency_col_idx}: '{header}'")
         
         if not page_col_idx or not transparency_col_idx:
             custom_print("Could not find required columns in the Milk worksheet!", "warning")
@@ -636,7 +636,6 @@ if milk_worksheet:
                 last_update_col_exists = True
                 last_update_col_idx = i + 1  # Convert to 1-indexed
                 custom_print(f"Found Last Update Time column in Ads Details worksheet at index {last_update_col_idx}")
-                break
                 
         if not last_update_col_exists:
             # Add Last Update Time column to Ads Details worksheet
@@ -916,7 +915,7 @@ for url in urls_to_process:
     progress_percent = (url_index / total_urls) * 100
     progress_bar = '#' * int(progress_percent / 2) + '-' * (50 - int(progress_percent / 2))
     custom_print(f"PROGRESS [Ad_details_scraper]: {progress_percent:.1f}% ({url_index}/{total_urls} URLs)\n[{progress_bar}] {progress_percent:.1f}%")
-    custom_print(f"\n===== Processing URL {url_index}/{total_urls} ({url_index + skipped_count} of {len(transparency_urls)} total) =====")
+    custom_print(f"\n===== Processing URL {url_index}/{len(urls_to_process)} ({url_index + skipped_count} of {len(transparency_urls)} total) =====")
     
     # Mark as processed at the start to handle retries
     if url not in previously_processed_urls_from_file:
@@ -1185,7 +1184,7 @@ for url in urls_to_process:
                 milk_headers = milk_worksheet.row_values(1)
                 milk_column_indices = {}
                 
-                # Find the necessary column indices - account for trailing spaces in column names
+                # Find the necessary column indices
                 for i, header in enumerate(milk_headers):
                     # Check for 'no.of ads By Ai' column (exact match with spaces)
                     if header == "no.of ads By Ai":
@@ -1209,7 +1208,7 @@ for url in urls_to_process:
                     elif header.lower().strip() in ["page transperancy", "page transparency"]:
                         milk_column_indices['page_transperancy'] = i + 1  # 1-indexed
                         custom_print(f"Found 'Page Transperancy' column via fallback at index {milk_column_indices['page_transperancy']}")
-                    
+            
                 # Also find URL column to check for existing URLs
                 url_col_index = None
                 for i, header in enumerate(milk_headers):
@@ -1535,7 +1534,7 @@ for url in urls_to_process:
     scroll_count = improved_human_like_scroll(
         driver, 
         scroll_pause_base=random.uniform(0.5, 1.8),  # Ultra-short pause time
-        max_scroll_attempts=6                        # Attempts at bottom
+        max_scroll_attempts=9                         # Attempts at bottom
     )
     
     custom_print(f"Completed {scroll_count} human-like scrolls")
@@ -2178,6 +2177,29 @@ for url in urls_to_process:
                             pass
                         except Exception as e:
                             custom_print(f"Error processing video: {str(e)}")
+                            
+                            # Fallback: try to locate video via XPath if not found above
+                            if not video_found:
+                                try:
+                                    video_element = child_div.find_element(
+                                        By.XPATH,
+                                        './/video[contains(@class, "x1lliihq") and contains(@class, "x5yr21d") and contains(@class, "xh8yej3")]'
+                                    )
+                                    if video_element:
+                                        media_url = video_element.get_attribute('src')
+                                        if media_url:
+                                            ad_data["media_type"] = "video"
+                                            ad_data["media_url"] = media_url
+                                            # Extract thumbnail URL (poster attribute)
+                                            thumbnail_url = video_element.get_attribute('poster')
+                                            if thumbnail_url:
+                                                ad_data["thumbnail_url"] = thumbnail_url
+                                            video_found = True
+                                except NoSuchElementException:
+                                    # Fallback video not found
+                                    pass
+                                except Exception as e:
+                                    custom_print(f"Error processing fallback video: {str(e)}")
                         
                         # Only try to find images if no video was found
                         if not video_found and (not ad_data.get("media_url") or not ad_data.get("media_type")):
