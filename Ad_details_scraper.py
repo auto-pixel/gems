@@ -1474,7 +1474,7 @@ for url in urls_to_process:
     custom_print(f"Waiting {delay:.2f} seconds before starting to scroll...")
     
     # Custom improved scrolling function that resets attempts after successful scrolls
-    def improved_human_like_scroll(driver, scroll_pause_base=2.0, max_scroll_attempts=4):
+    def improved_human_like_scroll(driver, scroll_pause_base=2.0, max_scroll_attempts=7):
         """
         Scrolls down a webpage with human-like behavior, resetting attempt counter after successful scrolls
         
@@ -1493,12 +1493,12 @@ for url in urls_to_process:
         
         while attempt < max_scroll_attempts:
             # Scroll down with a random offset for more human-like behavior
-            scroll_amount = random.randint(600, 1000)  # Varying scroll amounts
+            scroll_amount = random.randint(600, 2000)  # Varying scroll amounts
             driver.execute_script(f"window.scrollBy(0, {scroll_amount});")
             scroll_count += 1
             
             # Random pause time (with some variation to appear more human-like)
-            variation = random.uniform(0.5, 1.5)  # 50% below to 50% above base time
+            variation = random.uniform(0.5, 2.5)  # 50% below to 50% above base time
             pause_time = scroll_pause_base * variation
             time.sleep(pause_time)
             
