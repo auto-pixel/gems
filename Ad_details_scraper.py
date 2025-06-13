@@ -720,17 +720,17 @@ except Exception as e:
     custom_print(f"Error loading previously processed URLs: {e}", "error")
 
 # Clean all input URLs
-cleaned_urls = {clean_url(url): url for url in urls}
-custom_print(f"Cleaned {len(urls)} URLs for processing")
+if not transparency_urls:
+    custom_print("No transparency URLs found to process. Exiting.", "warning")
+    sys.exit(0)
 
-# Implement URL prioritization and filtering
-# Use a copy of the URLs for randomization but track which ones were processed
-custom_print("Setting up URL processing order...")
-urls_to_process = []  # Start with an empty list
-processed_urls = set()  # Keep track of processed URLs in this session
+# Create a clean list of URLs to process
+urls_to_process = [url.strip() for url in transparency_urls if url.strip()]
+cleaned_urls = {clean_url(url): url for url in urls_to_process}
+custom_print(f"Cleaned {len(cleaned_urls)} URLs for processing")
 
-# Process all URLs when force_reprocess is True
-urls_to_process = urls.copy()
+# Track processed URLs in this session
+processed_urls = set()
 skipped_count = 0
 custom_print(f"Added {len(urls_to_process)} URLs to processing list")
 
@@ -911,6 +911,12 @@ for url_info in reprocessing_needed:
 for url in urls_to_process:
     custom_print(f"\nProcessing transparency URL: {url}")
     url_index += 1
+    
+    # Update progress with current URL index and total
+    progress_percent = (url_index / total_urls) * 100
+    progress_bar = '#' * int(progress_percent / 2) + '-' * (50 - int(progress_percent / 2))
+    custom_print(f"PROGRESS [Ad_details_scraper]: {progress_percent:.1f}% ({url_index}/{total_urls} URLs)\n[{progress_bar}] {progress_percent:.1f}%")
+    custom_print(f"\n===== Processing URL {url_index}/{total_urls} ({url_index + skipped_count} of {len(transparency_urls)} total) =====")
     
     # Mark as processed at the start to handle retries
     if url not in previously_processed_urls_from_file:
@@ -1269,43 +1275,79 @@ for url in urls_to_process:
                             custom_print(f"Found URL column at index {url_col_index}")
                             break
                     
-                    # First try exact URL match
+                    # First try exact URL match in URL column
                     if url_col_index:
                         url_values = milk_worksheet.col_values(url_col_index)
                         for i, cell_url in enumerate(url_values):
                             if cell_url.strip() == url.strip():
                                 row_index = i + 1
-                                custom_print(f"Found exact URL match in Milk worksheet at row {row_index}")
+                                custom_print(f"Found exact URL match in URL column at row {row_index}")
                                 break
                     
-                    # If no exact match, check if it's a search URL and try to match by search term
+                    # Try exact URL match in Page Transparency column
+                    if not row_index and 'page_transperancy' in milk_column_indices:
+                        page_trans_values = milk_worksheet.col_values(milk_column_indices['page_transperancy'])
+                        for i, cell_value in enumerate(page_trans_values):
+                            if url.strip() == cell_value.strip():
+                                row_index = i + 1
+                                custom_print(f"Found exact URL match in Page Transparency column at row {row_index}")
+                                break
+                    
+                    # Handle search URLs (with search_type=keyword_unordered)
                     if not row_index and "search_type=keyword_unordered" in url:
                         search_term = extract_search_term(url)
                         if search_term:
-                            custom_print(f"Searching for term: {search_term} in Milk sheet...")
-                            # Check in Page Transparency column first
-                            if 'page_transperancy' in milk_column_indices:
+                            custom_print(f"Search URL detected. Searching for term: {search_term} in Milk sheet...")
+                            
+                            # Clean the search term for better matching
+                            clean_search_term = search_term.lower().strip()
+                            
+                            # Search in URL column first
+                            if url_col_index:
+                                url_values = milk_worksheet.col_values(url_col_index)
+                                for i, cell_value in enumerate(url_values):
+                                    if clean_search_term in cell_value.lower():
+                                        row_index = i + 1
+                                        custom_print(f"Matched search term in URL column at row {row_index}")
+                                        break
+                            
+                            # If no match, search in Page Transparency column
+                            if not row_index and 'page_transperancy' in milk_column_indices:
                                 page_trans_values = milk_worksheet.col_values(milk_column_indices['page_transperancy'])
                                 for i, cell_value in enumerate(page_trans_values):
-                                    if search_term.lower() in cell_value.lower():
+                                    if clean_search_term in cell_value.lower():
                                         row_index = i + 1
                                         custom_print(f"Matched search term in Page Transparency at row {row_index}")
                                         break
                             
-                            # If still no match, check in URL column
-                            if not row_index and url_col_index:
-                                url_values = milk_worksheet.col_values(url_col_index)
-                                for i, cell_value in enumerate(url_values):
-                                    if search_term.lower() in cell_value.lower():
-                                        row_index = i + 1
-                                        custom_print(f"Matched search term in URL column at row {row_index}")
-                                        break
+                            # If still no match, try matching just the domain part for URLs
+                            if not row_index and ('.com' in clean_search_term or '.' in clean_search_term):
+                                domain_part = clean_search_term.split('//')[-1].split('/')[0].split('?')[0]
+                                custom_print(f"Trying to match domain part: {domain_part}")
+                                
+                                # Check in URL column
+                                if url_col_index and not row_index:
+                                    url_values = milk_worksheet.col_values(url_col_index)
+                                    for i, cell_value in enumerate(url_values):
+                                        if domain_part in cell_value.lower():
+                                            row_index = i + 1
+                                            custom_print(f"Matched domain in URL column at row {row_index}")
+                                            break
+                                
+                                # Check in Page Transparency column
+                                if not row_index and 'page_transperancy' in milk_column_indices:
+                                    page_trans_values = milk_worksheet.col_values(milk_column_indices['page_transperancy'])
+                                    for i, cell_value in enumerate(page_trans_values):
+                                        if domain_part in cell_value.lower():
+                                            row_index = i + 1
+                                            custom_print(f"Matched domain in Page Transparency at row {row_index}")
+                                            break
                     
-                    # If still no match, try direct URL matching in Page Transparency column
+                    # If still no match, try partial URL matching in Page Transparency column
                     if not row_index and 'page_transperancy' in milk_column_indices:
                         page_trans_values = milk_worksheet.col_values(milk_column_indices['page_transperancy'])
                         for i, cell_value in enumerate(page_trans_values):
-                            if url.strip() in cell_value.strip():
+                            if url.strip() in cell_value.strip() or cell_value.strip() in url.strip():
                                 row_index = i + 1
                                 custom_print(f"Matched URL in Page Transparency column at row {row_index}")
                                 break
