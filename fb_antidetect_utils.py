@@ -265,8 +265,7 @@ def create_stealth_driver(use_proxy=False, proxy_manager=None, headless=True, ta
         options = uc.ChromeOptions()
         
         # Set a random user agent
-        ua = UserAgent()
-        user_agent = ua.chrome
+        user_agent = random.choice(USER_AGENTS)
         
         # Basic options
         options.add_argument(f'--user-agent={user_agent}')
@@ -278,6 +277,9 @@ def create_stealth_driver(use_proxy=False, proxy_manager=None, headless=True, ta
         options.add_argument('--no-sandbox')
         options.add_argument('--disable-dev-shm-usage')
         options.add_argument('--disable-gpu')
+        options.add_argument('--disable-software-rasterizer')
+        options.add_argument('--disable-web-security')
+        options.add_argument('--disable-blink-features')
         
         # Headless mode
         if headless:
@@ -315,12 +317,15 @@ def create_stealth_driver(use_proxy=False, proxy_manager=None, headless=True, ta
                 proxy_parts = proxy.split(':')
                 if len(proxy_parts) >= 2:  # Handle both host:port and user:pass@host:port
                     logging.info(f"Using proxy: {proxy}")
+                    # Add proxy to Chrome options
+                    proxy_arg = f'--proxy-server={proxy}'
+                    uc.ChromeOptions.add_argument(uc.ChromeOptions(), proxy_arg)
                 else:
                     logging.warning(f"Invalid proxy format: {proxy}. Expected format is host:port or user:pass@host:port")
                     proxy = None
         
-        # Try different Chrome versions
-        versions_to_try = [114, 112, None]  # Try latest stable if specific versions fail
+        # Try Chrome 137 first, then fallback to other versions if needed
+        versions_to_try = [137, 114, 112, None]  # Try v137 first, then fallback to others
         
         for version in versions_to_try:
             try:
@@ -338,6 +343,9 @@ def create_stealth_driver(use_proxy=False, proxy_manager=None, headless=True, ta
                 
                 # Additional anti-detection measures
                 driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+                driver.execute_script("window.navigator.chrome = {runtime: {}};")
+                driver.execute_script("const originalQuery = window.navigator.permissions.query; "
+                                    "return originalQuery.name === 'notifications';")
                 driver.set_page_load_timeout(60)
                 
                 # Set a random window size to avoid detection
@@ -362,6 +370,7 @@ def create_stealth_driver(use_proxy=False, proxy_manager=None, headless=True, ta
                 driver.quit()
             except:
                 pass
+        raise  # Re-raise the exception after cleanup
         raise
 
 def perform_human_like_scroll(driver, scroll_pause_base=3.0, max_scroll_attempts=3):
