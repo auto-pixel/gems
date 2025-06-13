@@ -1474,7 +1474,7 @@ for url in urls_to_process:
     custom_print(f"Waiting {delay:.2f} seconds before starting to scroll...")
     
     # Custom improved scrolling function that resets attempts after successful scrolls
-    def improved_human_like_scroll(driver, scroll_pause_base=1.0, max_scroll_attempts=4):
+    def improved_human_like_scroll(driver, scroll_pause_base=2.0, max_scroll_attempts=4):
         """
         Scrolls down a webpage with human-like behavior, resetting attempt counter after successful scrolls
         
