@@ -1534,7 +1534,7 @@ for url in urls_to_process:
     scroll_count = improved_human_like_scroll(
         driver, 
         scroll_pause_base=random.uniform(0.5, 1.8),  # Ultra-short pause time
-        max_scroll_attempts=7                        # Attempts at bottom
+        max_scroll_attempts=7                       # Attempts at bottom
     )
     
     custom_print(f"Completed {scroll_count} human-like scrolls")
@@ -2139,8 +2139,9 @@ for url in urls_to_process:
                             actual_url = unquote(decoded_url.split('u=')[1].split('&')[0]) if 'u=' in decoded_url else decoded_url
                         
                         # Check if ad link has already been scraped
-                        if decoded_url in scraped_ad_links:
-                            continue  # Skip duplicate ad link
+                        # Duplicate check removed to capture all ad variations even if they share the same destination URL
+                        # if decoded_url in scraped_ad_links:
+                        #     continue  # Skip duplicate ad link
 
                         # Add to scraped ad links set
                         scraped_ad_links.add(decoded_url)
