@@ -369,7 +369,7 @@ custom_print("Creating stealth browser driver with anti-detection measures")
 driver = create_stealth_driver(
     use_proxy=(proxy_manager is not None),
     proxy_manager=proxy_manager,
-    headless=True  # Set to False to see the browser in action
+    headless=False  # Set to False to see the browser in action
 )
 
 # Configure dynamic wait times (variable to appear more human-like)
@@ -1072,7 +1072,7 @@ for url in urls_to_process:
                 if proxy_manager:
                     custom_print("Attempting with direct connection (no proxy)...", "warning")
                     driver.quit()
-                    driver = create_stealth_driver(use_proxy=False, headless=True)
+                    driver = create_stealth_driver(use_proxy=False, headless=False)
                     wait = WebDriverWait(driver, random.uniform(8, 12))
                     
                 # Try one last time with direct connection
@@ -1792,7 +1792,7 @@ for url in urls_to_process:
                     driver = create_stealth_driver(
                         use_proxy=True,
                         proxy_manager=proxy_manager,
-                        headless=True
+                        headless=False
                     )
                     wait = WebDriverWait(driver, random.uniform(8, 12))
                     
