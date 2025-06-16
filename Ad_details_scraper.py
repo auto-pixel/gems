@@ -686,21 +686,10 @@ def clean_url(url):
         return ""
     return str(url).strip()
 
-# Load previously processed transparency URLs from file if it exists
-processed_transparency_urls_file = "processed_transparency_urls.txt"
-previously_processed_urls_from_file = set()
+# No longer tracking processed transparency URLs
 
-# Load previously processed URLs
-if os.path.exists(processed_transparency_urls_file):
-    try:
-        with open(processed_transparency_urls_file, 'r') as f:
-            previously_processed_urls_from_file = {line.strip() for line in f if line.strip()}
-        custom_print(f"Loaded {len(previously_processed_urls_from_file)} previously processed transparency URLs")
-    except Exception as e:
-        custom_print(f"Error loading processed transparency URLs: {e}", "error")
-
-# Filter out already processed URLs
-urls_to_process = [url for url in transparency_urls if url not in previously_processed_urls_from_file]
+# Process all transparency URLs
+urls_to_process = transparency_urls.copy()
 
 if not urls_to_process:
     custom_print("All transparency URLs have already been processed. Exiting.", "info")
@@ -750,14 +739,7 @@ urls = urls_to_process
 # Function to save processed URL to file
 def save_processed_url(url):
     """Save a processed URL to the persistent file"""
-    try:
-        with open(processed_urls_file, 'a') as f:
-            # Save original URL, not normalized version
-            f.write(f"{url}\n")
-        return True
-    except Exception as e:
-        custom_print(f"Error saving processed URL to file: {e}", "error")
-        return False
+    return False
 
 # Initialize progress tracking
 total_urls = len(urls_to_process)
@@ -917,18 +899,8 @@ for url in urls_to_process:
     custom_print(f"PROGRESS [Ad_details_scraper]: {progress_percent:.1f}% ({url_index}/{total_urls} URLs)\n[{progress_bar}] {progress_percent:.1f}%")
     custom_print(f"\n===== Processing URL {url_index}/{len(urls_to_process)} ({url_index + skipped_count} of {len(transparency_urls)} total) =====")
     
-    # Mark as processed at the start to handle retries
-    if url not in previously_processed_urls_from_file:
-        try:
-            with open(processed_transparency_urls_file, 'a') as f:
-                f.write(f"{url}\n")
-            previously_processed_urls_from_file.add(url)
-        except Exception as e:
-            custom_print(f"Error saving processed URL: {e}", "error")
-    
     # Set up tracking for this URL
     processed_urls.add(url)
-    should_skip_url = False
     
     # Track the milk sheet row for this URL if we know it
     current_milk_row = url_to_row_mapping.get(url, None)
@@ -1170,9 +1142,6 @@ for url in urls_to_process:
     except Exception as e:
         custom_print(f"Error extracting URL parameters: {e}", "error")
     
-    # Initialize should_skip_url flag
-    should_skip_url = False
-    
     # If ad_count is 0, update the Milk sheet and skip to the next URL without scrolling
     if ad_count == 0 or ad_count is None:
         custom_print("No ads found (count is 0). Updating Milk sheet and skipping to next URL...")
@@ -1230,11 +1199,9 @@ for url in urls_to_process:
                         if i > 0 and i < len(last_update_values) and cell_url.strip() == url.strip():
                             if last_update_values[i].strip():
                                 custom_print(f"This URL was already processed on {last_update_values[i]}")
-                                custom_print("Skipping this URL as it has already been processed...")
+                                custom_print("Reprocessing URL even though it was processed today")
                                 
-                                # Flag that this URL should be skipped
-                                should_skip_url = True
-                                # Add to processed URLs for progress tracking
+                                # Process the URL even if it was already processed today
                                 processed_urls.add(url)
                                 update_progress_percentage()
                                 break
@@ -1446,11 +1413,7 @@ for url in urls_to_process:
         update_progress_percentage()
         continue
         
-    # Check if this URL should be skipped (was already processed)
-    if should_skip_url:
-        custom_print(f"Skipping URL {url} as it was already processed")
-        update_progress_percentage()
-        continue
+    # Process all URLs without skipping
     
     # Define variable for storing ad data from this URL
     ads_data = {}
