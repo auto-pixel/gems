@@ -2121,49 +2121,94 @@ for url in urls_to_process:
                         # Check for video first
                         video_found = False
                         try:
-                            # Try to find video by class name first (most reliable)
-                            video_element = child_div.find_element(By.CSS_SELECTOR, 'video.x1lliihq.x5yr21d.xh8yej3')
+                            # List of possible video element selectors to try
+                            video_selectors = [
+                                # Standard video selectors with different class combinations
+                                'video.x1lliihq.x5yr21d.xh8yej3',
+                                'video.x1lliihq.x5yr21d.xh8yej3.x1n2onr6',
+                                'video[class*="x1lliihq"][class*="x5yr21d"][class*="xh8yej3"]',
+                                'video[class*="x1lliihq"][class*="x5yr21d"]',
+                                'video[class*="x5yr21d"]',
+                                'video'
+                            ]
                             
-                            if video_element:
-                                # Extract video URL
-                                media_url = video_element.get_attribute('src')
-                                if media_url:
-                                    ad_data["media_type"] = "video"
-                                    ad_data["media_url"] = media_url
+                            # Try each selector until we find a video
+                            for selector in video_selectors:
+                                try:
+                                    video_elements = child_div.find_elements(By.CSS_SELECTOR, selector)
+                                    for video_element in video_elements:
+                                        try:
+                                            # Check if element is actually a video and has src attribute
+                                            if video_element.tag_name.lower() == 'video':
+                                                # Extract video URL
+                                                media_url = video_element.get_attribute('src')
+                                                if media_url and media_url.strip() and 'blob:' not in media_url:
+                                                    ad_data["media_type"] = "video"
+                                                    ad_data["media_url"] = media_url
+                                                    
+                                                    # Extract thumbnail URL (poster attribute)
+                                                    thumbnail_url = video_element.get_attribute('poster')
+                                                    if thumbnail_url and thumbnail_url.strip() and 'data:image' not in thumbnail_url:
+                                                        ad_data["thumbnail_url"] = thumbnail_url
+                                                    else:
+                                                        # Fallback to first frame if poster is not available
+                                                        try:
+                                                            first_frame = video_element.get_attribute('poster')
+                                                            if first_frame and first_frame.strip() and 'data:image' not in first_frame:
+                                                                ad_data["thumbnail_url"] = first_frame
+                                                        except:
+                                                            pass
+                                                    
+                                                    video_found = True
+                                                    custom_print(f"Found video with URL: {media_url[:100]}...", "debug")
+                                                    if 'thumbnail_url' in ad_data:
+                                                        custom_print(f"Found thumbnail: {ad_data['thumbnail_url'][:100]}...", "debug")
+                                                    break  # Found a valid video, exit the loop
+                                        except Exception as e:
+                                            custom_print(f"Error processing video element: {str(e)}", "debug")
+                                            continue
                                     
-                                    # Extract thumbnail URL (poster attribute)
-                                    thumbnail_url = video_element.get_attribute('poster')
-                                    if thumbnail_url:
-                                        ad_data["thumbnail_url"] = thumbnail_url
-                                    video_found = True
-                        except NoSuchElementException:
-                            # Video not found, will try images next
-                            pass
-                        except Exception as e:
-                            custom_print(f"Error processing video: {str(e)}")
+                                    if video_found:
+                                        break  # Exit selector loop if video was found
+                                        
+                                except NoSuchElementException:
+                                    continue  # Try next selector if current one doesn't match
+                                except Exception as e:
+                                    custom_print(f"Error with selector {selector}: {str(e)}", "debug")
+                                    continue
                             
-                            # Fallback: try to locate video via XPath if not found above
+                            # If video not found with CSS selectors, try XPath as fallback
                             if not video_found:
                                 try:
-                                    video_element = child_div.find_element(
+                                    video_elements = child_div.find_elements(
                                         By.XPATH,
-                                        './/video[contains(@class, "x1lliihq") and contains(@class, "x5yr21d") and contains(@class, "xh8yej3")]'
+                                        './/video[contains(@class, "x1lliihq") or contains(@class, "x5yr21d") or contains(@class, "xh8yej3")]'
                                     )
-                                    if video_element:
-                                        media_url = video_element.get_attribute('src')
-                                        if media_url:
-                                            ad_data["media_type"] = "video"
-                                            ad_data["media_url"] = media_url
-                                            # Extract thumbnail URL (poster attribute)
-                                            thumbnail_url = video_element.get_attribute('poster')
-                                            if thumbnail_url:
-                                                ad_data["thumbnail_url"] = thumbnail_url
-                                            video_found = True
-                                except NoSuchElementException:
-                                    # Fallback video not found
-                                    pass
+                                    
+                                    for video_element in video_elements:
+                                        try:
+                                            media_url = video_element.get_attribute('src')
+                                            if media_url and media_url.strip() and 'blob:' not in media_url:
+                                                ad_data["media_type"] = "video"
+                                                ad_data["media_url"] = media_url
+                                                
+                                                # Extract thumbnail URL (poster attribute)
+                                                thumbnail_url = video_element.get_attribute('poster')
+                                                if thumbnail_url and thumbnail_url.strip() and 'data:image' not in thumbnail_url:
+                                                    ad_data["thumbnail_url"] = thumbnail_url
+                                                
+                                                video_found = True
+                                                custom_print(f"Found video via XPath: {media_url[:100]}...", "debug")
+                                                break
+                                        except Exception as e:
+                                            custom_print(f"Error processing fallback video element: {str(e)}", "debug")
+                                            continue
+                                        
                                 except Exception as e:
-                                    custom_print(f"Error processing fallback video: {str(e)}")
+                                    custom_print(f"Error in XPath fallback video search: {str(e)}", "debug")
+                        
+                        except Exception as e:
+                            custom_print(f"Unexpected error in video extraction: {str(e)}", "error")
                         
                         # Only try to find images if no video was found
                         if not video_found and (not ad_data.get("media_url") or not ad_data.get("media_type")):
