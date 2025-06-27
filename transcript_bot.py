@@ -347,7 +347,7 @@ def main():
             log(f"Invalid ads_count for library_id={lib_id}: {ads_count}, using default 0", "warning")
             ads_count_int = 0  # Continue processing with default value instead of skipping
         
-        if ads_count_int <= 10:
+        if ads_count_int <= 5:
             log(f"Skipping video with ads_count={ads_count_int} for library_id={lib_id}", "info")
             continue
         
