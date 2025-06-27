@@ -196,7 +196,7 @@ def update_winning_creatives():
             ads_count = int(digits_only)
             
             # Check if ads_count > 10
-            if ads_count > 10:
+            if ads_count > 5:
                 # Build identifiers for this row
                 identifiers = []
                 
