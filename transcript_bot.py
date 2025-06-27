@@ -121,6 +121,7 @@ COLUMNS = {
     "ads_count": "ads_count",
     "media_url": "media_url",
     "media_type": "media_type",
+    "date": "Date"  # Added date column for filtering
 }
 # If your real columns have trailing spaces, update here (e.g. "Name of page ")
 
@@ -237,6 +238,16 @@ def update_progress_percentage(current, total):
         sys.stdout.flush()
 
 # ============ MAIN BOT LOGIC ======================
+def is_within_last_5_days(date_str):
+    try:
+        from datetime import datetime, timedelta
+        date_obj = datetime.strptime(str(date_str).split()[0], "%Y-%m-%d")  # Get just the date part
+        five_days_ago = datetime.now() - timedelta(days=5)
+        return date_obj >= five_days_ago
+    except Exception as e:
+        log(f"Error parsing date '{date_str}': {e}", "warning")
+        return False
+
 def main():
     log("==== TRANSCRIPT BOT START ====")
     
@@ -259,9 +270,11 @@ def main():
     all_rows = ads_sheet.get_all_records()
     log(f"Loaded {len(all_rows)} rows from '{SOURCE_TAB}'.")
 
-    # Filter for videos
-    video_rows = [row for row in all_rows if str(row.get(COLUMNS["media_type"], "")).strip().lower() == "video"]
-    log(f"Found {len(video_rows)} video ads.")
+    # Filter for videos and only those from the last 5 days
+    video_rows = [row for row in all_rows 
+                 if (str(row.get(COLUMNS["media_type"], "")).strip().lower() == "video" and
+                     is_within_last_5_days(row.get(COLUMNS["date"], '')))]  # Use the date column for filtering
+    log(f"Found {len(video_rows)} video ads from the last 5 days.")
 
 
     # Get already processed videos with their dates and URLs
@@ -347,7 +360,7 @@ def main():
             log(f"Invalid ads_count for library_id={lib_id}: {ads_count}, using default 0", "warning")
             ads_count_int = 0  # Continue processing with default value instead of skipping
         
-        if ads_count_int <= 5:
+        if ads_count_int <= 10:
             log(f"Skipping video with ads_count={ads_count_int} for library_id={lib_id}", "info")
             continue
         
