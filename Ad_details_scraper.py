@@ -16,6 +16,7 @@ from urllib.parse import unquote, urlparse
 import json
 import gspread
 from google.oauth2.service_account import Credentials
+from gspread.utils import rowcol_to_a1
 from google.auth.exceptions import GoogleAuthError
 import logging
 import os
@@ -1669,6 +1670,9 @@ for url in urls_to_process:
                 if 'ip_address' in milk_column_indices:
                     milk_worksheet.update_cell(row_index, milk_column_indices['ip_address'], current_ip)
                     custom_print(f"Updated 'IP Address' column with value: {current_ip}")
+
+                # Apply zero-ad streak colouring
+                apply_zero_ads_formatting(milk_worksheet, row_index, milk_column_indices, int(value_to_update))
             else:
                 custom_print(f"Could not find a matching row in the Milk worksheet for this URL", "warning")
         except Exception as e:
