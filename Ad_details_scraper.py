@@ -35,6 +35,58 @@ from fb_antidetect_utils import (
     get_current_ip
 )
 
+
+# -----------------------------------------------------------------------------
+# Zero-ad streak colouring helpers (added 2025-07-29)
+# -----------------------------------------------------------------------------
+from typing import Dict
+
+def _zero_ad_colors():
+    """Return RGB dicts for consecutive zero-ad days (1-7)."""
+    return [
+        {"red": 1.0, "green": 1.0, "blue": 0.6},  # day 1
+        {"red": 1.0, "green": 0.9, "blue": 0.4},  # day 2
+        {"red": 1.0, "green": 0.8, "blue": 0.2},  # day 3
+        {"red": 1.0, "green": 0.7, "blue": 0.1},  # day 4
+        {"red": 1.0, "green": 0.6, "blue": 0.0},  # day 5
+        {"red": 1.0, "green": 0.4, "blue": 0.0},  # day 6
+        {"red": 0.8, "green": 0.0, "blue": 0.0},  # day 7 – dark red
+    ]
+
+
+def apply_zero_ads_formatting(ws, row_idx: int, col_indices: Dict[str, int], ad_count: int):
+    """Colour IP cell, track streak, and delete row after prolonged zero-ads period."""
+    if "ip_address" not in col_indices:
+        return
+
+    # Ensure helper column exists
+    headers = ws.row_values(1)
+    if "Zero Ads Streak" in [h.strip() for h in headers]:
+        streak_col = headers.index("Zero Ads Streak") + 1
+    else:
+        streak_col = len(headers) + 1
+        ws.update_cell(1, streak_col, "Zero Ads Streak")
+
+    # Get current streak value
+    try:
+        streak = int(ws.cell(row_idx, streak_col).value or 0)
+    except Exception:
+        streak = 0
+
+    ip_a1 = rowcol_to_a1(row_idx, col_indices["ip_address"])
+
+    if ad_count == 0:
+        streak += 1
+        ws.update_cell(row_idx, streak_col, str(streak))
+        color_dict = _zero_ad_colors()[min(streak, 7) - 1]
+        ws.format(ip_a1, {"backgroundColor": color_dict})
+        if streak > 7:
+            ws.delete_rows(row_idx)
+    else:
+        if streak != 0:
+            ws.update_cell(row_idx, streak_col, "0")
+        ws.format(ip_a1, {"backgroundColor": {"red": 1, "green": 1, "blue": 1}})
+
 # Set up logging system
 log_dir = "logs"
 os.makedirs(log_dir, exist_ok=True)
@@ -1671,8 +1723,10 @@ for url in urls_to_process:
                     milk_worksheet.update_cell(row_index, milk_column_indices['ip_address'], current_ip)
                     custom_print(f"Updated 'IP Address' column with value: {current_ip}")
 
-                # Apply zero-ad streak colouring
-                apply_zero_ads_formatting(milk_worksheet, row_index, milk_column_indices, int(value_to_update))
+                    # Apply zero-ad streak colouring only to IP cell
+                    apply_zero_ads_formatting(milk_worksheet, row_index, milk_column_indices, int(value_to_update))
+
+
             else:
                 custom_print(f"Could not find a matching row in the Milk worksheet for this URL", "warning")
         except Exception as e:
