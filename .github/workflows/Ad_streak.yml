@@ -1,0 +1,98 @@
+name: Ad_streak
+
+on:
+  schedule:
+    - cron: '30 22 * * *'  # Run daily at 10:30 AM UTC (4:00 PM Indian time - UTC+5:30)
+  workflow_dispatch:     # Allow manual triggering
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 1200  # 20 hours timeout for long-running tasks
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12.3'
+          cache: 'pip'
+          check-latest: true
+      
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          
+          # Install core dependencies first
+          pip install --upgrade setuptools wheel
+          
+          # Install undetected-chromedriver first with specific version
+          pip install "undetected-chromedriver>=3.5.5" --no-cache-dir
+          
+          # Install other requirements
+          pip install -r requirements.txt
+          
+          # Debug info
+          python -c "import undetected_chromedriver as uc; print(f'Undetected ChromeDriver version: {uc.__version__}')"
+      
+      - name: Setup credentials
+        run: |
+          # Create Google credentials file from GitHub secrets
+          # Single quotes around the secret prevent shell interpretation issues
+          echo '${{ secrets.GOOGLE_CREDENTIALS_JSON }}' > credentials.json
+          # Make sure the JSON is properly formatted without any extra characters
+          python -c "
+          import json, sys, os
+          try:
+              # Try to parse the credentials file
+              with open('credentials.json', 'r') as f:
+                  json.load(f)
+              print('✓ Google credentials JSON validated successfully')
+          except json.JSONDecodeError as e:
+              print(f'ERROR: Invalid JSON in credentials file: {e}')
+              print('Checking file content:')
+              with open('credentials.json', 'r') as f:
+                  print(f.read())
+              sys.exit(1)
+          "
+          
+
+
+      - name: Run zero_ad_streak_tracker.py
+        env:
+          DISPLAY: ':99'
+          CHROME_PATH: /usr/bin/google-chrome
+        run: |
+          # Set display for headless Chrome
+          export DISPLAY=:99
+          
+          # Verify Chrome is accessible
+          which google-chrome
+          google-chrome --version
+          
+          # Start Xvfb if not already running
+          if ! pgrep -x "Xvfb" > /dev/null; then
+            Xvfb :99 -screen 0 1920x1080x24 > /dev/null 2>&1 &
+            export DISPLAY=:99
+          fi
+          
+          # Set Chrome binary location for undetected-chromedriver
+          export CHROME_PATH=$(which google-chrome)
+          
+          # Debug info
+          echo "Using Chrome binary at: $CHROME_PATH"
+          echo "DISPLAY: $DISPLAY"
+          
+          # Run the script with a longer timeout
+          python zero_ad_streak_tracker.py
+      
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: scraping-results
+          path: |
+            ads_data.json
+            logs/
