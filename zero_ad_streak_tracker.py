@@ -104,7 +104,7 @@ class FacebookAdScraper:
             page_name (str): Name of the Facebook page
             
         Returns:
-            tuple: (page_id, transparency_url) or (None, None) if extraction fails
+            tuple: (page_id, transparency_url) or (None, None) if extraction fails or transparency link not found
         """
         if not page_url or not isinstance(page_url, str):
             logger.warning(f"Invalid page URL for '{page_name}': {page_url}")
@@ -112,6 +112,11 @@ class FacebookAdScraper:
         
         if not page_url.startswith("http"):
             page_url = f"https://{page_url}" if not page_url.startswith("www.") else f"https://{page_url}"
+            
+        # Check if the URL contains 'about_profile_transparency', if not, return early
+        if '/about_profile_transparency' not in page_url:
+            logger.info(f"No transparency link found in sheet for '{page_name}'. Skipping...")
+            return None, None
         
         try:
             logger.info(f"Navigating to page URL for '{page_name}': {page_url}")
@@ -402,6 +407,19 @@ class FacebookAdScraper:
                 time_col_idx = len(headers) + (1 if ads_col_idx == len(headers) else 0)
                 self.worksheet.update_cell(1, time_col_idx + 1, "Last Update Time")
                 logger.info("Added 'Last Update Time' column")
+                
+            # Check if "Zero Ads Streak" column exists, add if it doesn't
+            streak_col_idx = None
+            for idx, header in enumerate(headers):
+                if "zero ads streak" in header.lower():
+                    streak_col_idx = idx
+                    break
+                    
+            if streak_col_idx is None:
+                # Add the column after the last existing column
+                streak_col_idx = max(len(headers), ads_col_idx + 1, time_col_idx + 1)
+                self.worksheet.update_cell(1, streak_col_idx + 1, "Zero Ads Streak")
+                logger.info("Added 'Zero Ads Streak' column")
 
             # Process each row starting from the second row (index 1)
             for row_idx, row in enumerate(all_values[1:], start=2):  # Start from 2 because sheets are 1-indexed and we skip headers
@@ -444,10 +462,38 @@ class FacebookAdScraper:
 
                     # Update the sheet
                     if ad_count is not None:
-                        # Write to the ads column
-                        self.worksheet.update_cell(row_idx, ads_col_idx + 1, ad_count)
-                        # Update the Last Update Time column with current timestamp
                         current_time = time.strftime("%Y-%m-%d %H:%M:%S")
+                        
+                        # Get current streak value
+                        current_streak = 0
+                        if len(row) > streak_col_idx and row[streak_col_idx].strip():
+                            try:
+                                current_streak = int(float(row[streak_col_idx]))
+                            except (ValueError, TypeError):
+                                current_streak = 0
+                        
+                        # Update streak based on ad count
+                        if ad_count == 0:
+                            # Increment streak
+                            new_streak = current_streak + 1
+                            
+                            # Check if we've reached 30 days
+                            if new_streak >= 30:
+                                logger.info(f"Row {row_idx}: Reached 30+ days of zero ads. Deleting row...")
+                                self.worksheet.delete_rows(row_idx)
+                                logger.info(f"Deleted row {row_idx} after 30+ days of zero ads")
+                                continue  # Skip the rest of the loop since row was deleted
+                            
+                            # Update streak in sheet
+                            self.worksheet.update_cell(row_idx, streak_col_idx + 1, str(new_streak))
+                            logger.info(f"Row {row_idx}: Updated zero ads streak to {new_streak}")
+                        elif current_streak > 0:
+                            # Reset streak if there are ads now
+                            self.worksheet.update_cell(row_idx, streak_col_idx + 1, "0")
+                            logger.info(f"Row {row_idx}: Reset zero ads streak (found {ad_count} ads)")
+                        
+                        # Update ad count and timestamp
+                        self.worksheet.update_cell(row_idx, ads_col_idx + 1, ad_count)
                         self.worksheet.update_cell(row_idx, time_col_idx + 1, current_time)
                         logger.info(f"Updated ad count for row {row_idx}: {ad_count} and timestamp: {current_time}")
                         self.successful_processed += 1
