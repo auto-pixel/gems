@@ -136,7 +136,7 @@ jobs:
           "
       
 
-      - name: Run Ad_details_scraper.py
+      - name: Run zero_ad_streak_tracker.py
         env:
           DISPLAY: ':99'
           CHROME_PATH: /usr/bin/google-chrome
@@ -162,7 +162,7 @@ jobs:
           echo "DISPLAY: $DISPLAY"
           
           # Run the script with a longer timeout
-          python master_script.py
+          python zero_ad_streak_tracker.py
       
       - name: Upload results
         uses: actions/upload-artifact@v4
