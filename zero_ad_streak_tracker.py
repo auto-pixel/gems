@@ -13,6 +13,7 @@ from webdriver_manager.chrome import ChromeDriverManager
 import gspread
 from google.oauth2.service_account import Credentials
 from google.auth.exceptions import GoogleAuthError
+import random
 
 # Set up logging
 logging.basicConfig(
@@ -76,7 +77,8 @@ class FacebookAdScraper:
         """Set up Selenium WebDriver with Chrome in headless mode."""
         try:
             chrome_options = Options()
-            chrome_options.add_argument("--headless")
+            # Remove headless mode for debugging - you can add it back later
+            # chrome_options.add_argument("--headless")
             chrome_options.add_argument("--no-sandbox")
             chrome_options.add_argument("--disable-dev-shm-usage")
             chrome_options.add_argument("--disable-gpu")
@@ -84,17 +86,50 @@ class FacebookAdScraper:
             chrome_options.add_argument("--disable-notifications")
             chrome_options.add_argument("--disable-infobars")
             chrome_options.add_argument("--disable-extensions")
-            chrome_options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Safari/537.36")
+            chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+            chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+            chrome_options.add_experimental_option('useAutomationExtension', False)
+            
+            # Suppress common Chrome warnings/errors
+            chrome_options.add_argument("--disable-logging")
+            chrome_options.add_argument("--log-level=3")
+            chrome_options.add_argument("--disable-gpu-logging")
+            chrome_options.add_argument("--disable-software-rasterizer")
+            chrome_options.add_argument("--disable-background-timer-throttling")
+            chrome_options.add_argument("--disable-renderer-backgrounding")
+            chrome_options.add_argument("--disable-features=TranslateUI")
+            chrome_options.add_argument("--disable-default-apps")
+            chrome_options.add_argument("--no-first-run")
+            chrome_options.add_argument("--disable-web-security")
+            chrome_options.add_argument("--allow-running-insecure-content")
+            
+            # Rotate user agents to avoid detection
+            user_agents = [
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            ]
+            chrome_options.add_argument(f"--user-agent={random.choice(user_agents)}")
             
             # Use webdriver_manager to handle ChromeDriver installation
             service = Service(ChromeDriverManager().install())
             self.driver = webdriver.Chrome(service=service, options=chrome_options)
+            
+            # Execute script to remove webdriver property
+            self.driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+            
             logger.info("Selenium WebDriver initialized successfully")
             return True
             
         except Exception as e:
             logger.error(f"Error setting up Selenium: {str(e)}")
             return False
+    
+    def random_delay(self, min_seconds=2, max_seconds=5):
+        """Add random delay to avoid detection."""
+        delay = random.uniform(min_seconds, max_seconds)
+        time.sleep(delay)
     
     def get_page_id_from_page(self, page_url, page_name):
         """Navigate to the Facebook page, go to About section, and extract Page ID from transparency.
@@ -121,102 +156,73 @@ class FacebookAdScraper:
         try:
             logger.info(f"Navigating to page URL for '{page_name}': {page_url}")
             self.driver.get(page_url)
-            time.sleep(5)  # Allow page to fully load
+            self.random_delay(5, 8)  # Allow page to fully load with random delay
 
-            # If already on the about_profile_transparency page, skip all clicking
-            if '/about_profile_transparency' not in page_url:
-                # Click on About tab
-                try:
-                    about_tab = WebDriverWait(self.driver, 15).until(
-                        EC.element_to_be_clickable((By.XPATH, "//a[contains(text(), 'About')]"))
-                    )
-                    self.driver.execute_script("arguments[0].click();", about_tab)  # JavaScript click for better reliability
-                    logger.info(f"Clicked on About tab for '{page_name}'")
-                    time.sleep(3)  # Wait for About page to load
-                except Exception as e:
-                    logger.warning(f"Could not click on About tab for '{page_name}': {str(e)}")
-                    # Try direct navigation to about page
-                    about_url = f"{page_url.rstrip('/')}/about"
-                    logger.info(f"Trying direct navigation to About page: {about_url}")
-                    self.driver.get(about_url)
-                    time.sleep(3)
-
-                # Click on Page transparency section
-                try:
-                    transparency_section = WebDriverWait(self.driver, 15).until(
-                        EC.element_to_be_clickable((By.XPATH, "//a[contains(text(), 'Page transparency') or contains(text(), 'Page Transparency')]"))
-                    )
-                    self.driver.execute_script("arguments[0].click();", transparency_section)  # JavaScript click
-                    logger.info(f"Clicked on Page transparency section for '{page_name}'")
-                    time.sleep(3)  # Wait for transparency info to load
-                except Exception as e:
-                    logger.warning(f"Could not click on Page transparency section for '{page_name}': {str(e)}")
-                    return None, None
+            # Handle potential cookies/consent banner
+            try:
+                # Try to click "Accept All" or similar cookie consent button
+                cookie_buttons = [
+                    "//button[contains(text(), 'Accept all')]",
+                    "//button[contains(text(), 'Accept All')]",
+                    "//button[contains(text(), 'Allow all')]",
+                    "//div[@data-testid='cookie-policy-manage-dialog-accept-button']"
+                ]
+                for button_xpath in cookie_buttons:
+                    try:
+                        cookie_button = WebDriverWait(self.driver, 3).until(
+                            EC.element_to_be_clickable((By.XPATH, button_xpath))
+                        )
+                        self.driver.execute_script("arguments[0].click();", cookie_button)
+                        logger.info("Clicked cookie consent button")
+                        self.random_delay(2, 3)
+                        break
+                    except TimeoutException:
+                        continue
+            except Exception:
+                pass  # Continue if no cookie banner found
 
             # Extract Page ID using multiple methods for robustness
             try:
-                # Method 1: Using direct XPath - looking for a span near "Page ID" text
-                try:
-                    # First try to find "Page ID" label
-                    page_id_label = WebDriverWait(self.driver, 5).until(
-                        EC.presence_of_element_located((By.XPATH, "//div[contains(text(), 'Page ID')]"))
-                    )
-                    # Then find the actual ID (following sibling or nearby element)
-                    page_id_element = WebDriverWait(self.driver, 5).until(
-                        EC.presence_of_element_located((By.XPATH, "//div[contains(text(), 'Page ID')]/following-sibling::div"))
-                    )
-                    page_id = page_id_element.text.strip()
-                    logger.info(f"Method 1: Extracted Page ID for '{page_name}': {page_id}")
-                except (TimeoutException, NoSuchElementException, StaleElementReferenceException):
+                # Method 1: Look for page ID in the URL parameters or page source
+                current_url = self.driver.current_url
+                page_id_match = re.search(r'page_id=(\d+)', current_url)
+                if page_id_match:
+                    page_id = page_id_match.group(1)
+                    logger.info(f"Method 1: Extracted Page ID from URL for '{page_name}': {page_id}")
+                else:
+                    # Method 2: Look in page source for page ID patterns
+                    page_source = self.driver.page_source
+                    
+                    # Look for common patterns where page ID appears
+                    patterns = [
+                        r'"page_id":"(\d+)"',
+                        r'"pageID":"(\d+)"',
+                        r'"id":"(\d{10,})"',
+                        r'pageID=(\d+)',
+                        r'page_id=(\d+)'
+                    ]
+                    
                     page_id = None
+                    for pattern in patterns:
+                        match = re.search(pattern, page_source)
+                        if match:
+                            page_id = match.group(1)
+                            logger.info(f"Method 2: Extracted Page ID from source for '{page_name}': {page_id}")
+                            break
                 
-                # Method 2: JavaScript method to extract content including pseudo-elements
-                if not page_id or not page_id.isdigit():
+                # Method 3: Try to find the page ID in transparency section
+                if not page_id:
                     try:
-                        # Look for any span that might contain the ID (numeric-only text)
-                        page_id = self.driver.execute_script("""
-                            // Try different selectors that might contain the page ID
-                            const selectors = [
-                                'span[class*="193iq5w"]',
-                                'span[dir="auto"]',
-                                'div[class*="xzsf02u"]',
-                                'div'  // As a last resort, check all divs for numeric content
-                            ];
-                            
-                            for (const selector of selectors) {
-                                const elements = document.querySelectorAll(selector);
-                                for (const el of elements) {
-                                    const text = el.textContent.trim();
-                                    // Looking for a numeric-only string that's likely to be an ID
-                                    if (/^\d{12,}$/.test(text)) {
-                                        return text;
-                                    }
-                                }
-                            }
-                            return null;
-                        """)
-                        if page_id:
-                            logger.info(f"Method 2: Extracted Page ID for '{page_name}': {page_id}")
-                    except Exception as js_error:
-                        logger.warning(f"JavaScript extraction failed: {str(js_error)}")
-                
-                # Method 3: Take a screenshot and log HTML if previous methods failed
-                if not page_id or not page_id.isdigit():
-                    # Save screenshot for debugging
-                    screenshot_path = f"debug_{page_name.replace(' ', '_')}.png"
-                    self.driver.save_screenshot(screenshot_path)
-                    logger.warning(f"Could not extract Page ID using standard methods. Screenshot saved to {screenshot_path}")
-                    
-                    # Get and log page HTML for manual inspection
-                    html = self.driver.page_source
-                    with open(f"debug_{page_name.replace(' ', '_')}.html", "w", encoding="utf-8") as f:
-                        f.write(html)
-                    
-                    # Final attempt: look for any numeric string that looks like an ID in the HTML
-                    id_match = re.search(r'>\s*(\d{12,})\s*<', html)
-                    if id_match:
-                        page_id = id_match.group(1)
-                        logger.info(f"Method 3: Extracted Page ID from HTML for '{page_name}': {page_id}")
+                        # Look for numeric text that could be page ID
+                        numeric_elements = self.driver.find_elements(By.XPATH, "//div[text()[normalize-space()]]")
+                        for element in numeric_elements:
+                            text = element.text.strip()
+                            if text.isdigit() and len(text) >= 10:  # Page IDs are typically 10+ digits
+                                page_id = text
+                                logger.info(f"Method 3: Found potential Page ID for '{page_name}': {page_id}")
+                                break
+                    except Exception as e:
+                        logger.warning(f"Method 3 failed: {str(e)}")
                 
                 if page_id and page_id.isdigit():
                     # Construct the transparency URL with the page ID
@@ -255,62 +261,119 @@ class FacebookAdScraper:
             
             # Navigate to the URL
             self.driver.get(url)
-            time.sleep(5)  # Give more time for content to load
+            self.random_delay(8, 12)  # Give more time for content to load
             
-            # Wait for content to load (the ad count element)
-            wait = WebDriverWait(self.driver, 15)
-            
-            # Wait for either the ad count element or "No ads" message
+            # Handle potential cookies/consent banner again
             try:
-                # Try to find the ad count element first
-                ad_count_element = wait.until(
-                    EC.presence_of_element_located((By.XPATH, "//div[contains(text(), 'results') or contains(text(), 'result')]"))
+                cookie_buttons = [
+                    "//button[contains(text(), 'Accept all')]",
+                    "//button[contains(text(), 'Accept All')]",
+                    "//button[contains(text(), 'Allow all')]"
+                ]
+                for button_xpath in cookie_buttons:
+                    try:
+                        cookie_button = WebDriverWait(self.driver, 3).until(
+                            EC.element_to_be_clickable((By.XPATH, button_xpath))
+                        )
+                        self.driver.execute_script("arguments[0].click();", cookie_button)
+                        logger.info("Clicked cookie consent button")
+                        self.random_delay(2, 3)
+                        break
+                    except TimeoutException:
+                        continue
+            except Exception:
+                pass
+            
+            # Wait for content to load
+            wait = WebDriverWait(self.driver, 20)
+            
+            ad_count = None
+            ad_count_text = None
+            
+            try:
+                # Target the specific Facebook class for ad count results
+                # Using CSS selector for the exact class combination
+                css_selector = "div.x8t9es0.x1uxerd5.xrohxju.x108nfp6.xq9mrsl.x1h4wwuj.x117nqv4.xeuugli"
+                
+                # Wait for the element with the specific class to be present
+                result_element = wait.until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, css_selector))
                 )
-                ad_count_text = ad_count_element.text
+                
+                ad_count_text = result_element.text.strip()
                 logger.info(f"Found ad count text: {ad_count_text}")
                 
-                # Extract the numeric part using regex
-                matches = re.search(r'~?(\d+(?:,\d+)?)', ad_count_text)
+            except TimeoutException:
+                # Fallback: Try finding by XPath with the class attributes
+                try:
+                    xpath_selector = "//div[@class='x8t9es0 x1uxerd5 xrohxju x108nfp6 xq9mrsl x1h4wwuj x117nqv4 xeuugli']"
+                    result_element = wait.until(
+                        EC.presence_of_element_located((By.XPATH, xpath_selector))
+                    )
+                    ad_count_text = result_element.text.strip()
+                    logger.info(f"Found ad count text with XPath: {ad_count_text}")
+                except TimeoutException:
+                    logger.warning(f"Could not find element with specific class for '{page_name}'")
+            
+            # If still no text found, try JavaScript approach targeting the specific class
+            if not ad_count_text:
+                try:
+                    ad_count_text = self.driver.execute_script("""
+                        // Look for the specific class combination
+                        const targetElement = document.querySelector('div.x8t9es0.x1uxerd5.xrohxju.x108nfp6.xq9mrsl.x1h4wwuj.x117nqv4.xeuugli');
+                        if (targetElement) {
+                            return targetElement.textContent.trim();
+                        }
+                        
+                        // Fallback: Look for any element with this class pattern
+                        const elements = document.querySelectorAll('div[class*="x8t9es0"][class*="x1uxerd5"]');
+                        for (const el of elements) {
+                            const text = el.textContent.trim();
+                            if (text.includes('result') || text.includes('ads')) {
+                                return text;
+                            }
+                        }
+                        return null;
+                    """)
+                    if ad_count_text:
+                        logger.info(f"JavaScript found ad count text: {ad_count_text}")
+                except Exception as js_error:
+                    logger.warning(f"JavaScript extraction failed: {str(js_error)}")
+            
+            # Parse the ad count from the text
+            if ad_count_text:
+                logger.info(f"Processing text: '{ad_count_text}'")
+                
+                # Extract only the numeric value from text like "0 results", "100 results", "~380 results", etc.
+                # Handle tilde (~) for approximate counts
+                matches = re.search(r'^~?(\d+(?:,\d+)*)', ad_count_text.strip())
                 if matches:
                     # Remove commas and convert to int
                     ad_count = int(matches.group(1).replace(',', ''))
                     logger.info(f"Extracted ad count for '{page_name}': {ad_count}")
                     return ad_count
                 else:
-                    logger.warning(f"Could not extract numeric ad count from: {ad_count_text}")
-                    return 0
-                    
-            except TimeoutException:
-                # Check if "No ads" message is present
-                try:
-                    no_ads_element = self.driver.find_element(By.XPATH, "//div[contains(text(), 'No ads')]")
-                    logger.info(f"Page '{page_name}' has no ads")
-                    return 0
-                except NoSuchElementException:
-                    # Try JavaScript as a last resort
-                    try:
-                        ad_count_text = self.driver.execute_script("""
-                            const elements = document.querySelectorAll('div');
-                            for (const el of elements) {
-                                const text = el.textContent.trim();
-                                if (text.includes('results') || text.includes('result')) {
-                                    return text;
-                                }
-                            }
-                            return null;
-                        """)
-                        
-                        if ad_count_text:
-                            matches = re.search(r'~?(\d+(?:,\d+)?)', ad_count_text)
-                            if matches:
-                                ad_count = int(matches.group(1).replace(',', ''))
-                                logger.info(f"JavaScript-extracted ad count for '{page_name}': {ad_count}")
-                                return ad_count
-                    except Exception as js_error:
-                        logger.warning(f"JavaScript ad count extraction failed: {str(js_error)}")
-                    
-                    logger.warning(f"Could not find ad count or 'No ads' message for '{page_name}'")
+                    logger.warning(f"Could not extract numeric ad count from: '{ad_count_text}'")
+                    # If text doesn't start with a number, might be "No results" or similar
+                    if 'no' in ad_count_text.lower() and ('result' in ad_count_text.lower() or 'ads' in ad_count_text.lower()):
+                        logger.info(f"Page '{page_name}' has no ads (text: '{ad_count_text}')")
+                        return 0
                     return None
+            else:
+                # Last resort: save screenshot and page source for debugging
+                screenshot_path = f"debug_{page_name.replace(' ', '_').replace('/', '_')}.png"
+                html_path = f"debug_{page_name.replace(' ', '_').replace('/', '_')}.html"
+                
+                try:
+                    self.driver.save_screenshot(screenshot_path)
+                    with open(html_path, "w", encoding="utf-8") as f:
+                        f.write(self.driver.page_source)
+                    logger.warning(f"Could not find ad count. Debug files saved: {screenshot_path}, {html_path}")
+                except Exception as save_error:
+                    logger.warning(f"Could not save debug files: {str(save_error)}")
+                
+                logger.warning(f"Could not find ad count element for '{page_name}'")
+                return None
                 
         except Exception as e:
             logger.error(f"Error extracting ad count for '{page_name}': {str(e)}")
@@ -500,8 +563,10 @@ class FacebookAdScraper:
                     else:
                         logger.warning(f"Failed to extract ad count for row {row_idx}")
                         self.failed_processed += 1
-                    # Add delay to avoid rate limiting
-                    time.sleep(2)
+                    
+                    # Add random delay to avoid rate limiting
+                    self.random_delay(3, 8)
+                    
                 except Exception as e:
                     logger.error(f"Error processing row {row_idx}: {str(e)}")
                     self.failed_processed += 1
