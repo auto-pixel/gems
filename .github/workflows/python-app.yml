@@ -8,166 +8,99 @@ on:
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 1200  # 20 hours timeout for long-running tasks
+    timeout-minutes: 1200  # 20 hours timeout
     
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
-      
+
       - name: Set up Python 3.12
         uses: actions/setup-python@v4
         with:
           python-version: '3.12.3'
           cache: 'pip'
           check-latest: true
-      
+
       - name: Install system dependencies
         run: |
-          # Install required system packages for Ubuntu Noble (24.04)
           sudo apt-get update
           sudo apt-get install -y wget unzip xvfb libxss1 libxtst6 libnss3 libatk1.0-0 \
             libcups2 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libxkbcommon0 \
             libatspi2.0-0 libx11-xcb1 libasound2t64 libatk-bridge2.0-0
-          
-          # Install Chrome
+
           wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
           echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list
           sudo apt-get update
           sudo apt-get install -y google-chrome-stable
-          
-          # Verify installations
-          echo "Chrome version: $(google-chrome --version)"
-          
-          # Set up virtual display for headless mode
+
           sudo Xvfb :99 -screen 0 1920x1080x24 > /dev/null 2>&1 &
-          export DISPLAY=:99
-          
-          # Set Chrome binary location
           echo "CHROME_PATH=$(which google-chrome)" >> $GITHUB_ENV
-          
-          # Debug info
-          echo "Chrome binary location: $(which google-chrome)"
-          echo "DISPLAY set to: $DISPLAY"
-      
+          echo "DISPLAY=:99" >> $GITHUB_ENV
+
       - name: Install Python dependencies
         run: |
-          python -m pip install --upgrade pip
-          
-          # Install core dependencies first
-          pip install --upgrade setuptools wheel
-          
-          # Install undetected-chromedriver first with specific version
+          python -m pip install --upgrade pip setuptools wheel
           pip install "undetected-chromedriver>=3.5.5" --no-cache-dir
-          
-          # Install other requirements
           pip install -r requirements.txt
-          
-          # Debug info
-          python -c "import undetected_chromedriver as uc; print(f'Undetected ChromeDriver version: {uc.__version__}')"
-      
+          python -c "import undetected_chromedriver as uc; print(f'✓ Undetected ChromeDriver version: {uc.__version__}')"
+
       - name: Setup credentials
         run: |
-          # Create Google credentials file from GitHub secrets
-          # Single quotes around the secret prevent shell interpretation issues
           echo '${{ secrets.GOOGLE_CREDENTIALS_JSON }}' > credentials.json
-          # Make sure the JSON is properly formatted without any extra characters
           python -c "
-          import json, sys, os
-          try:
-              # Try to parse the credentials file
-              with open('credentials.json', 'r') as f:
-                  json.load(f)
-              print('✓ Google credentials JSON validated successfully')
-          except json.JSONDecodeError as e:
-              print(f'ERROR: Invalid JSON in credentials file: {e}')
-              print('Checking file content:')
-              with open('credentials.json', 'r') as f:
-                  print(f.read())
-              sys.exit(1)
-          "
-          
-          # Create .env file with Claude API key (no quotes needed)
+          import json
+          with open('credentials.json', 'r') as f:
+              json.load(f)
+          print('✓ Google credentials JSON validated')"
           echo CLAUDE_API_KEY=${{ secrets.CLAUDE_API_KEY }} > .env
-          
-          echo "Credentials files created successfully"
-        
+
       - name: Download proxies
         run: |
-          # Download fresh proxies from free proxy list
           python -c "
-          import requests
-          import random
-          import time
-          
-          user_agents = [
-              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-              'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0',
-              'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3 Safari/605.1.15'
-          ]
-          
-          headers = {'User-Agent': random.choice(user_agents)}
-          
-          # Try multiple sources for redundancy
+          import requests, random, time
           sources = [
-              'https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt',
-              'https://raw.githubusercontent.com/ShiftyTR/Proxy-List/master/http.txt',
-              'https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt'
+            'https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt',
+            'https://raw.githubusercontent.com/ShiftyTR/Proxy-List/master/http.txt',
+            'https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt'
           ]
-          
+          headers = {'User-Agent': 'Mozilla/5.0'}
           proxies = set()
-          
-          for source in sources:
+          for url in sources:
               try:
-                  response = requests.get(source, headers=headers, timeout=10)
-                  if response.status_code == 200:
-                      new_proxies = [line.strip() for line in response.text.splitlines() if line.strip()]
-                      proxies.update(new_proxies)
-                      print(f'Downloaded {len(new_proxies)} proxies from {source}')
-                  time.sleep(random.uniform(1, 3))  # Be nice to the servers
+                  r = requests.get(url, headers=headers, timeout=10)
+                  if r.status_code == 200:
+                      proxies.update(line.strip() for line in r.text.splitlines() if line.strip())
+                      print(f'Downloaded from {url}')
               except Exception as e:
-                  print(f'Error downloading from {source}: {e}')
-          
-          # Write to file
+                  print(f'Error: {e}')
+              time.sleep(random.uniform(1, 2))
           with open('proxies.txt', 'w') as f:
-              for proxy in proxies:
-                  f.write(f'{proxy}\\n')
-          
-          print(f'Saved {len(proxies)} unique proxies to proxies.txt')
-          "
-      
+              for p in proxies: f.write(p + '\\n')
+          print(f'Total proxies saved: {len(proxies)}')"
 
-      - name: Run zero_ad_streak_tracker.py
+      - name: Run zero_ad_streak_tracker.py with fail protection
         env:
           DISPLAY: ':99'
           CHROME_PATH: /usr/bin/google-chrome
         run: |
-          # Set display for headless Chrome
-          export DISPLAY=:99
-          
-          # Verify Chrome is accessible
-          which google-chrome
-          google-chrome --version
-          
-          # Start Xvfb if not already running
-          if ! pgrep -x "Xvfb" > /dev/null; then
-            Xvfb :99 -screen 0 1920x1080x24 > /dev/null 2>&1 &
-            export DISPLAY=:99
-          fi
-          
-          # Set Chrome binary location for undetected-chromedriver
-          export CHROME_PATH=$(which google-chrome)
-          
-          # Debug info
-          echo "Using Chrome binary at: $CHROME_PATH"
-          echo "DISPLAY: $DISPLAY"
-          
-          # Run the script with a longer timeout
-          python zero_ad_streak_tracker.py
-      
-      - name: Upload results
+          set -e
+          echo "STARTING SCRIPT..."
+          python zero_ad_streak_tracker.py || echo "⚠️ Script crashed but continuing workflow"
+
+      - name: Upload scraping results
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: scraping-results
           path: |
             ads_data.json
             logs/
+
+      - name: Upload screenshots and debug HTMLs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-files
+          path: |
+            *.png
+            *.html
