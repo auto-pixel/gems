@@ -584,57 +584,141 @@ def scrape_ads(url, driver_path, original_transparency_url=None):
 
 
         # Try to extract the div with "results" text using the correct element structure
+        # Debug: Find all elements that contain "results" to see what we're dealing with
         try:
-            # First try the specific element structure from the HTML
-            element = driver.find_element(By.XPATH, "//div[@aria-level='3'][@role='heading'][contains(@class, 'x8t9es0')][contains(text(), 'results')]")
+            all_results_elements = driver.find_elements(By.XPATH, "//div[contains(text(), 'results')]")
+            print(f"\n=== DEBUGGING: Found {len(all_results_elements)} elements containing 'results' ===")
+            for i, elem in enumerate(all_results_elements[:5]):  # Show first 5
+                try:
+                    text = elem.text.strip()
+                    classes = elem.get_attribute('class')
+                    aria_level = elem.get_attribute('aria-level')
+                    role = elem.get_attribute('role')
+                    print(f"Element {i+1}: '{text}' | aria-level='{aria_level}' | role='{role}' | classes='{classes[:50]}...'")
+                except:
+                    print(f"Element {i+1}: Could not extract details")
+            print("=== END DEBUGGING ===")
+        except Exception as e:
+            print(f"Debug search failed: {e}")
+        
+        # Now try to find the correct element with improved selectors
+        try:
+            # Method 1: Most specific - target the main page results count (not ad-specific results)
+            # Look for elements that are likely to be the main count (higher up in DOM, main heading)
+            element = driver.find_element(By.XPATH, "//div[@aria-level='3'][@role='heading'][contains(@class, 'x8t9es0')][contains(text(), 'results') and (contains(text(), '1,000') or contains(text(), '~1') or string-length(text()) < 20)]")
             value_text = element.text.strip()
-            print(f"Found count text (method 1): {value_text}")
+            print(f"Found count text (method 1 - specific): {value_text}")
         except NoSuchElementException:
             try:
-                # Fallback to more general selector
-                element = driver.find_element(By.XPATH, "//div[@role='heading'][contains(text(), 'results') or contains(text(), 'result')]")
+                # Method 2: Look for the element that contains comma-separated thousands
+                element = driver.find_element(By.XPATH, "//div[@aria-level='3'][@role='heading'][contains(text(), 'results') and contains(text(), ',')]")
                 value_text = element.text.strip()
-                print(f"Found count text (method 2): {value_text}")
+                print(f"Found count text (method 2 - comma): {value_text}")
             except NoSuchElementException:
                 try:
-                    # Final fallback to original method
-                    element = driver.find_element(By.XPATH, "(//div[contains(text(), 'results')])[1]")
+                    # Method 3: Get the first aria-level='3' heading with results (should be main count)
+                    element = driver.find_element(By.XPATH, "(//div[@aria-level='3'][@role='heading'][contains(text(), 'results')])[1]")
                     value_text = element.text.strip()
-                    print(f"Found count text (method 3): {value_text}")
+                    print(f"Found count text (method 3 - first heading): {value_text}")
                 except NoSuchElementException:
-                    print("Ad count element not found with any method.")
-                    value_text = ""
+                    try:
+                        # Method 4: Look for results text that's likely the main count (shorter text, higher numbers)
+                        elements = driver.find_elements(By.XPATH, "//div[@role='heading'][contains(text(), 'results')]")
+                        value_text = ""
+                        for elem in elements:
+                            text = elem.text.strip()
+                            # Prefer elements with higher numbers or comma-separated numbers
+                            if ',' in text or any(char in text for char in ['1,000', '~1', '2,000', '3,000', '4,000', '5,000']):
+                                value_text = text
+                                print(f"Found count text (method 4 - high number priority): {value_text}")
+                                break
+                        
+                        if not value_text and elements:
+                            # Fallback to first element if no high numbers found
+                            value_text = elements[0].text.strip()
+                            print(f"Found count text (method 4 - fallback): {value_text}")
+                        
+                        if not value_text:
+                            raise NoSuchElementException("No suitable results element found")
+                            
+                    except (NoSuchElementException, IndexError):
+                        print("Ad count element not found with any method.")
+                        value_text = ""
 
         # Parse the number from the string
         if value_text:
-            print(f"Parsing ad count from: '{value_text}'")
+            print(f"\n=== AD COUNT PARSING DEBUG ===")
+            print(f"Raw extracted text: '{value_text}'")
+            print(f"Text length: {len(value_text)}")
+            print(f"Text repr: {repr(value_text)}")
             
             # Handle tilde (~) and extract numeric value with K/M suffixes
             # Examples: "~1,000 results", "950 results", "~5K results"
-            match = re.search(r'~?(\d+(?:,\d+)*)([KMkm]?)\s*results?', value_text, re.IGNORECASE)
+            pattern = r'~?(\d+(?:,\d+)*)([KMkm]?)\s*results?'
+            print(f"Using regex pattern: {pattern}")
+            
+            match = re.search(pattern, value_text, re.IGNORECASE)
             
             if match:
+                print(f"Regex match found!")
+                print(f"Match groups: {match.groups()}")
+                print(f"Full match: '{match.group(0)}'")
+                
                 number_str = match.group(1).replace(',', '')  # Remove commas
                 suffix = match.group(2).upper() if match.group(2) else ''
                 
+                print(f"Number string (after comma removal): '{number_str}'")
+                print(f"Suffix: '{suffix}'")
+                
                 try:
                     number = float(number_str)
+                    print(f"Converted to float: {number}")
+                    
                     if suffix == "K":
                         total_ad_count_of_page = int(number * 1_000)
+                        print(f"Applied K multiplier: {total_ad_count_of_page}")
                     elif suffix == "M":
                         total_ad_count_of_page = int(number * 1_000_000)
+                        print(f"Applied M multiplier: {total_ad_count_of_page}")
                     else:
                         total_ad_count_of_page = int(number)
+                        print(f"No multiplier applied: {total_ad_count_of_page}")
                     
-                    print(f"Successfully parsed ad count: {total_ad_count_of_page} (from '{value_text}')")
+                    print(f"✅ Successfully parsed ad count: {total_ad_count_of_page} (from '{value_text}')")
                 except ValueError as e:
-                    print(f"Error converting '{number_str}' to number: {e}")
+                    print(f"❌ Error converting '{number_str}' to number: {e}")
                     total_ad_count_of_page = 0
             else:
-                print(f"Could not parse ad count from text: '{value_text}'")
-                total_ad_count_of_page = 0
+                print(f"❌ Regex did not match the text: '{value_text}'")
+                print(f"Trying alternative patterns...")
+                
+                # Try some alternative patterns
+                alt_patterns = [
+                    r'(\d+(?:,\d+)*)\s*results?',  # Without tilde
+                    r'~(\d+(?:,\d+)*)\s*results?',  # With tilde only
+                    r'(\d+)\s*results?'  # Simple digits only
+                ]
+                
+                for i, alt_pattern in enumerate(alt_patterns, 1):
+                    alt_match = re.search(alt_pattern, value_text, re.IGNORECASE)
+                    if alt_match:
+                        print(f"✅ Alternative pattern {i} matched: {alt_match.group(0)}")
+                        number_str = alt_match.group(1).replace(',', '')
+                        try:
+                            total_ad_count_of_page = int(float(number_str))
+                            print(f"✅ Parsed with alternative pattern: {total_ad_count_of_page}")
+                            break
+                        except ValueError:
+                            continue
+                    else:
+                        print(f"❌ Alternative pattern {i} failed: {alt_pattern}")
+                
+                if total_ad_count_of_page == 0:
+                    print(f"❌ Could not parse ad count from text: '{value_text}'")
+            
+            print(f"=== END DEBUG ===")
         else:
-            print("No ad count text found")
+            print("❌ No ad count text found")
             total_ad_count_of_page = 0
                 
         time.sleep(random.uniform(0.5, 1.5))  # Human-like delay
