@@ -78,14 +78,14 @@ jobs:
               for p in proxies: f.write(p + '\\n')
           print(f'Total proxies saved: {len(proxies)}')"
 
-      - name: Run zero_ad_streak_tracker.py with fail protection
+      - name: Run Ad_details_scraper.py with fail protection
         env:
           DISPLAY: ':99'
           CHROME_PATH: /usr/bin/google-chrome
         run: |
           set -e
           echo "STARTING SCRIPT..."
-          python zero_ad_streak_tracker.py || echo "⚠️ Script crashed but continuing workflow"
+          python Ad_details_scraper.py || echo "⚠️ Script crashed but continuing workflow"
 
       - name: Upload scraping results
         if: always()
