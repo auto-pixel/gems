@@ -45,17 +45,19 @@ jobs:
       - name: Setup credentials
         run: |
           echo '${{ secrets.GOOGLE_CREDENTIALS_JSON }}' > credentials.json
-          python -c '
+
+          python <<EOF
 import json
 with open("credentials.json", "r") as f:
     json.load(f)
 print("✓ Google credentials JSON validated")
-'
+EOF
+
           echo CLAUDE_API_KEY=${{ secrets.CLAUDE_API_KEY }} > .env
 
       - name: Download proxies
         run: |
-          python -c '
+          python <<EOF
 import requests, random, time
 sources = [
   "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt",
@@ -76,7 +78,7 @@ for url in sources:
 with open("proxies.txt", "w") as f:
     for p in proxies: f.write(p + "\n")
 print(f"Total proxies saved: {len(proxies)}")
-'
+EOF
 
       - name: Run Ad_details_scraper.py
         env:
