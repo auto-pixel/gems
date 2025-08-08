@@ -636,8 +636,8 @@ def main():
     import argparse
     
     parser = argparse.ArgumentParser(description='Facebook Ad Scraper')
-    parser.add_argument('--sheet_name', default='Debt 2025 Swipe File ',
-                        help='Name of the Google Sheets document (default: Debt 2025 Swipe File )')
+    parser.add_argument('--sheet_name', default='Master Auto Swipe - Test ankur',
+                        help='Name of the Google Sheets document (default: Master Auto Swipe - Test ankur)')
     parser.add_argument('--worksheet_name', default='Milk',
                         help='Name of the worksheet/tab within the document (default: Milk)')
     parser.add_argument('--credentials', default='credentials.json', 
