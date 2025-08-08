@@ -251,23 +251,61 @@ class FacebookAdScraper:
             
             # Wait for either the ad count element or "No ads" message
             try:
-                # Try to find the ad count element first
-                ad_count_element = wait.until(
-                    EC.presence_of_element_located((By.XPATH, "//div[contains(text(), 'results') or contains(text(), 'result')]"))
-                )
-                ad_count_text = ad_count_element.text
-                logger.info(f"Found ad count text: {ad_count_text}")
+                # Try to find the exact element structure from the examples
+                try:
+                    # First try the exact structure from examples
+                    ad_count_element = wait.until(
+                        EC.presence_of_element_located((
+                            By.XPATH, 
+                            "//div[@role='heading' and @aria-level='3' and contains(@class, 'x8t9es0')]"
+                        ))
+                    )
+                    
+                    ad_count_text = ad_count_element.text.strip()
+                    logger.info(f"Found ad count text: {ad_count_text}")
+                    
+                    # Extract number using regex that handles all example cases
+                    match = re.search(r'[~]?(\d{1,3}(?:,\d{3})*|\d+)', ad_count_text)
+                    if match:
+                        ad_count = int(match.group(1).replace(',', ''))
+                        logger.info(f"Extracted ad count for '{page_name}': {ad_count}")
+                        return ad_count
+                    
+                    # If no numbers found, check for "0 results" case
+                    if '0 results' in ad_count_text:
+                        return 0
+                        
+                except Exception as e:
+                    logger.warning(f"Error with exact element match: {str(e)}")
                 
-                # Extract the numeric part using regex
-                matches = re.search(r'~?(\d+(?:,\d+)?)', ad_count_text)
-                if matches:
-                    # Remove commas and convert to int
-                    ad_count = int(matches.group(1).replace(',', ''))
-                    logger.info(f"Extracted ad count for '{page_name}': {ad_count}")
-                    return ad_count
-                else:
-                    logger.warning(f"Could not extract numeric ad count from: {ad_count_text}")
-                    return 0
+                # Fallback to more general patterns if exact match fails
+                logger.info("Trying fallback patterns for ad count extraction")
+                
+                # Try to find any element containing 'results' text
+                try:
+                    results_elements = wait.until(
+                        EC.presence_of_all_elements_located((
+                            By.XPATH, 
+                            "//*[contains(text(), 'result')]"
+                        ))
+                    )
+                    
+                    for element in results_elements:
+                        try:
+                            text = element.text.strip()
+                            match = re.search(r'[~]?(\d{1,3}(?:,\d{3})*|\d+)\s+results?', text, re.IGNORECASE)
+                            if match:
+                                ad_count = int(match.group(1).replace(',', ''))
+                                logger.info(f"Fallback extracted ad count for '{page_name}': {ad_count}")
+                                return ad_count
+                        except:
+                            continue
+                            
+                except Exception as e:
+                    logger.warning(f"Fallback pattern failed: {str(e)}")
+                
+                logger.warning(f"Could not extract numeric ad count from page")
+                return None
                     
             except TimeoutException:
                 # Check if "No ads" message is present
@@ -598,8 +636,8 @@ def main():
     import argparse
     
     parser = argparse.ArgumentParser(description='Facebook Ad Scraper')
-    parser.add_argument('--sheet_name', default='Master Auto Swipe - Test ankur',
-                        help='Name of the Google Sheets document (default: Master Auto Swipe - Test ankur)')
+    parser.add_argument('--sheet_name', default='Debt 2025 Swipe File ',
+                        help='Name of the Google Sheets document (default: Debt 2025 Swipe File )')
     parser.add_argument('--worksheet_name', default='Milk',
                         help='Name of the worksheet/tab within the document (default: Milk)')
     parser.add_argument('--credentials', default='credentials.json', 
