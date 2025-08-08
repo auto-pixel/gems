@@ -6,10 +6,10 @@ from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, NoSuchElementException, StaleElementReferenceException
-from selenium.webdriver.common.keys import Keys
 from webdriver_manager.chrome import ChromeDriverManager
 import gspread
 from google.oauth2.service_account import Credentials
@@ -245,36 +245,67 @@ class FacebookAdScraper:
             logger.warning(f"Invalid URL for page '{page_name}': {url}")
             return None
             
-        try:
-            logger.info(f"Processing page: '{page_name}'")
-            logger.info(f"Opening URL: {url}")
-            
-            # Navigate to the URL
-            self.driver.get(url)
-            time.sleep(5)  # Give more time for content to load
-            
-            # Wait for content to load (the ad count element)
+        def try_extract_ad_count():
+            """Helper function to attempt ad count extraction."""
             wait = WebDriverWait(self.driver, 15)
             
             # Wait for either the ad count element or "No ads" message
             try:
-                # Try to find the ad count element first
-                ad_count_element = wait.until(
-                    EC.presence_of_element_located((By.XPATH, "//div[contains(text(), 'results') or contains(text(), 'result')]"))
-                )
-                ad_count_text = ad_count_element.text
-                logger.info(f"Found ad count text: {ad_count_text}")
+                # Try to find the exact element structure from the examples
+                try:
+                    # First try the exact structure from examples
+                    ad_count_element = wait.until(
+                        EC.presence_of_element_located((
+                            By.XPATH, 
+                            "//div[@role='heading' and @aria-level='3' and contains(@class, 'x8t9es0')]"
+                        ))
+                    )
+                    
+                    ad_count_text = ad_count_element.text.strip()
+                    logger.info(f"Found ad count text: {ad_count_text}")
+                    
+                    # Extract number using regex that handles all example cases
+                    match = re.search(r'[~]?(\d{1,3}(?:,\d{3})*|\d+)', ad_count_text)
+                    if match:
+                        ad_count = int(match.group(1).replace(',', ''))
+                        logger.info(f"Extracted ad count for '{page_name}': {ad_count}")
+                        return ad_count
+                    
+                    # If no numbers found, check for "0 results" case
+                    if '0 results' in ad_count_text:
+                        return 0
+                        
+                except Exception as e:
+                    logger.warning(f"Error with exact element match: {str(e)}")
                 
-                # Extract the numeric part using regex
-                matches = re.search(r'~?(\d+(?:,\d+)?)', ad_count_text)
-                if matches:
-                    # Remove commas and convert to int
-                    ad_count = int(matches.group(1).replace(',', ''))
-                    logger.info(f"Extracted ad count for '{page_name}': {ad_count}")
-                    return ad_count
-                else:
-                    logger.warning(f"Could not extract numeric ad count from: {ad_count_text}")
-                    return 0
+                # Fallback to more general patterns if exact match fails
+                logger.info("Trying fallback patterns for ad count extraction")
+                
+                # Try to find any element containing 'results' text
+                try:
+                    results_elements = wait.until(
+                        EC.presence_of_all_elements_located((
+                            By.XPATH, 
+                            "//*[contains(text(), 'result')]"
+                        ))
+                    )
+                    
+                    for element in results_elements:
+                        try:
+                            text = element.text.strip()
+                            match = re.search(r'[~]?(\d{1,3}(?:,\d{3})*|\d+)\s+results?', text, re.IGNORECASE)
+                            if match:
+                                ad_count = int(match.group(1).replace(',', ''))
+                                logger.info(f"Fallback extracted ad count for '{page_name}': {ad_count}")
+                                return ad_count
+                        except:
+                            continue
+                            
+                except Exception as e:
+                    logger.warning(f"Fallback pattern failed: {str(e)}")
+                
+                logger.warning(f"Could not extract numeric ad count from page")
+                return None
                     
             except TimeoutException:
                 # Check if "No ads" message is present
@@ -304,72 +335,78 @@ class FacebookAdScraper:
                                 return ad_count
                     except Exception as js_error:
                         logger.warning(f"JavaScript ad count extraction failed: {str(js_error)}")
-                
-                # Try pressing ESC to close any popups/overlays and retry
-                logger.info(f"Initial extraction failed for '{page_name}', trying to close popups with ESC")
-                try:
-                    # Press ESC key to close any popups or overlays
-                    self.driver.find_element(By.TAG_NAME, 'body').send_keys(Keys.ESCAPE)
-                    time.sleep(2)  # Wait for popup to close
                     
-                    # Retry extraction after closing popups
-                    logger.info(f"Retrying ad count extraction for '{page_name}' after ESC")
-                    
-                    # Try to find the ad count element again
-                    try:
-                        ad_count_element = wait.until(
-                            EC.presence_of_element_located((By.XPATH, "//div[contains(text(), 'results') or contains(text(), 'result')]"))
-                        )
-                        ad_count_text = ad_count_element.text
-                        logger.info(f"Found ad count text after ESC: {ad_count_text}")
-                        
-                        # Extract the numeric part using regex
-                        matches = re.search(r'~?(\d+(?:,\d+)?)', ad_count_text)
-                        if matches:
-                            # Remove commas and convert to int
-                            ad_count = int(matches.group(1).replace(',', ''))
-                            logger.info(f"Successfully extracted ad count for '{page_name}' after ESC: {ad_count}")
-                            return ad_count
-                        else:
-                            logger.warning(f"Could not extract numeric ad count from retry: {ad_count_text}")
-                            return 0
-                            
-                    except TimeoutException:
-                        # Check if "No ads" message is present after ESC
-                        try:
-                            no_ads_element = self.driver.find_element(By.XPATH, "//div[contains(text(), 'No ads')]")
-                            logger.info(f"Page '{page_name}' has no ads (found after ESC)")
-                            return 0
-                        except NoSuchElementException:
-                            # Try JavaScript as a last resort after ESC
-                            try:
-                                ad_count_text = self.driver.execute_script("""
-                                    const elements = document.querySelectorAll('div');
-                                    for (const el of elements) {
-                                        const text = el.textContent.trim();
-                                        if (text.includes('results') || text.includes('result')) {
-                                            return text;
-                                        }
-                                    }
-                                    return null;
-                                """)
-                                
-                                if ad_count_text:
-                                    matches = re.search(r'~?(\d+(?:,\d+)?)', ad_count_text)
-                                    if matches:
-                                        ad_count = int(matches.group(1).replace(',', ''))
-                                        logger.info(f"JavaScript-extracted ad count for '{page_name}' after ESC: {ad_count}")
-                                        return ad_count
-                            except Exception as js_error:
-                                logger.warning(f"JavaScript ad count extraction failed after ESC: {str(js_error)}")
-                            
-                            logger.warning(f"Could not find ad count or 'No ads' message for '{page_name}' even after ESC")
-                            return None
-                            
-                except Exception as esc_error:
-                    logger.warning(f"Error during ESC retry for '{page_name}': {str(esc_error)}")
-                    logger.warning(f"Could not find ad count or 'No ads' message for '{page_name}'")
                     return None
+        
+        def handle_popups_and_close_buttons():
+            """Handle popups and close buttons that might interfere with ad count extraction."""
+            try:
+                # Press ESC to close any popups
+                logger.info(f"Pressing ESC to close potential popups for '{page_name}'")
+                self.driver.find_element(By.TAG_NAME, 'body').send_keys(Keys.ESCAPE)
+                time.sleep(2)
+                
+                # Look for common close button patterns and click them
+                close_button_selectors = [
+                    "//button[@aria-label='Close']",
+                    "//button[contains(@class, 'close')]",
+                    "//div[@role='button' and contains(@aria-label, 'Close')]",
+                    "//span[contains(@class, 'close')]",
+                    "//i[contains(@class, 'close')]",
+                    "//button[text()='×']",
+                    "//button[text()='Close']",
+                    "//div[contains(@class, 'modal')]//button",
+                    "//div[contains(@class, 'popup')]//button",
+                    "//div[contains(@class, 'overlay')]//button"
+                ]
+                
+                for selector in close_button_selectors:
+                    try:
+                        close_buttons = self.driver.find_elements(By.XPATH, selector)
+                        for button in close_buttons:
+                            if button.is_displayed() and button.is_enabled():
+                                logger.info(f"Found and clicking close button for '{page_name}': {selector}")
+                                button.click()
+                                time.sleep(1)
+                                break
+                    except Exception as close_error:
+                        # Continue to next selector if this one fails
+                        continue
+                        
+                # Additional wait after handling popups
+                time.sleep(3)
+                
+            except Exception as popup_error:
+                logger.warning(f"Error handling popups for '{page_name}': {str(popup_error)}")
+        
+        try:
+            logger.info(f"Processing page: '{page_name}'")
+            logger.info(f"Opening URL: {url}")
+            
+            # Navigate to the URL
+            self.driver.get(url)
+            time.sleep(5)  # Give more time for content to load
+            
+            # First attempt to extract ad count
+            result = try_extract_ad_count()
+            
+            if result is not None:
+                return result
+            
+            # If first attempt failed, handle popups and try again
+            logger.warning(f"Could not find ad count or 'No ads' message for '{page_name}' - attempting popup handling")
+            handle_popups_and_close_buttons()
+            
+            # Second attempt after handling popups
+            logger.info(f"Retrying ad count extraction after popup handling for '{page_name}'")
+            result = try_extract_ad_count()
+            
+            if result is not None:
+                logger.info(f"Successfully extracted ad count after popup handling for '{page_name}': {result}")
+                return result
+            else:
+                logger.warning(f"Still could not find ad count after popup handling for '{page_name}'")
+                return None
                 
         except Exception as e:
             logger.error(f"Error extracting ad count for '{page_name}': {str(e)}")
