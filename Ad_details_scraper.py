@@ -9,6 +9,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, NoSuchElementException, StaleElementReferenceException
+from selenium.webdriver.common.keys import Keys
 from webdriver_manager.chrome import ChromeDriverManager
 import gspread
 from google.oauth2.service_account import Credentials
@@ -303,7 +304,70 @@ class FacebookAdScraper:
                                 return ad_count
                     except Exception as js_error:
                         logger.warning(f"JavaScript ad count extraction failed: {str(js_error)}")
+                
+                # Try pressing ESC to close any popups/overlays and retry
+                logger.info(f"Initial extraction failed for '{page_name}', trying to close popups with ESC")
+                try:
+                    # Press ESC key to close any popups or overlays
+                    self.driver.find_element(By.TAG_NAME, 'body').send_keys(Keys.ESCAPE)
+                    time.sleep(2)  # Wait for popup to close
                     
+                    # Retry extraction after closing popups
+                    logger.info(f"Retrying ad count extraction for '{page_name}' after ESC")
+                    
+                    # Try to find the ad count element again
+                    try:
+                        ad_count_element = wait.until(
+                            EC.presence_of_element_located((By.XPATH, "//div[contains(text(), 'results') or contains(text(), 'result')]"))
+                        )
+                        ad_count_text = ad_count_element.text
+                        logger.info(f"Found ad count text after ESC: {ad_count_text}")
+                        
+                        # Extract the numeric part using regex
+                        matches = re.search(r'~?(\d+(?:,\d+)?)', ad_count_text)
+                        if matches:
+                            # Remove commas and convert to int
+                            ad_count = int(matches.group(1).replace(',', ''))
+                            logger.info(f"Successfully extracted ad count for '{page_name}' after ESC: {ad_count}")
+                            return ad_count
+                        else:
+                            logger.warning(f"Could not extract numeric ad count from retry: {ad_count_text}")
+                            return 0
+                            
+                    except TimeoutException:
+                        # Check if "No ads" message is present after ESC
+                        try:
+                            no_ads_element = self.driver.find_element(By.XPATH, "//div[contains(text(), 'No ads')]")
+                            logger.info(f"Page '{page_name}' has no ads (found after ESC)")
+                            return 0
+                        except NoSuchElementException:
+                            # Try JavaScript as a last resort after ESC
+                            try:
+                                ad_count_text = self.driver.execute_script("""
+                                    const elements = document.querySelectorAll('div');
+                                    for (const el of elements) {
+                                        const text = el.textContent.trim();
+                                        if (text.includes('results') || text.includes('result')) {
+                                            return text;
+                                        }
+                                    }
+                                    return null;
+                                """)
+                                
+                                if ad_count_text:
+                                    matches = re.search(r'~?(\d+(?:,\d+)?)', ad_count_text)
+                                    if matches:
+                                        ad_count = int(matches.group(1).replace(',', ''))
+                                        logger.info(f"JavaScript-extracted ad count for '{page_name}' after ESC: {ad_count}")
+                                        return ad_count
+                            except Exception as js_error:
+                                logger.warning(f"JavaScript ad count extraction failed after ESC: {str(js_error)}")
+                            
+                            logger.warning(f"Could not find ad count or 'No ads' message for '{page_name}' even after ESC")
+                            return None
+                            
+                except Exception as esc_error:
+                    logger.warning(f"Error during ESC retry for '{page_name}': {str(esc_error)}")
                     logger.warning(f"Could not find ad count or 'No ads' message for '{page_name}'")
                     return None
                 
