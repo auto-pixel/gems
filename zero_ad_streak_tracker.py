@@ -6,6 +6,7 @@ from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, NoSuchElementException, StaleElementReferenceException
@@ -244,15 +245,8 @@ class FacebookAdScraper:
             logger.warning(f"Invalid URL for page '{page_name}': {url}")
             return None
             
-        try:
-            logger.info(f"Processing page: '{page_name}'")
-            logger.info(f"Opening URL: {url}")
-            
-            # Navigate to the URL
-            self.driver.get(url)
-            time.sleep(5)  # Give more time for content to load
-            
-            # Wait for content to load (the ad count element)
+        def try_extract_ad_count():
+            """Helper function to attempt ad count extraction."""
             wait = WebDriverWait(self.driver, 15)
             
             # Wait for either the ad count element or "No ads" message
@@ -304,8 +298,77 @@ class FacebookAdScraper:
                     except Exception as js_error:
                         logger.warning(f"JavaScript ad count extraction failed: {str(js_error)}")
                     
-                    logger.warning(f"Could not find ad count or 'No ads' message for '{page_name}'")
                     return None
+        
+        def handle_popups_and_close_buttons():
+            """Handle popups and close buttons that might interfere with ad count extraction."""
+            try:
+                # Press ESC to close any popups
+                logger.info(f"Pressing ESC to close potential popups for '{page_name}'")
+                self.driver.find_element(By.TAG_NAME, 'body').send_keys(Keys.ESCAPE)
+                time.sleep(2)
+                
+                # Look for common close button patterns and click them
+                close_button_selectors = [
+                    "//button[@aria-label='Close']",
+                    "//button[contains(@class, 'close')]",
+                    "//div[@role='button' and contains(@aria-label, 'Close')]",
+                    "//span[contains(@class, 'close')]",
+                    "//i[contains(@class, 'close')]",
+                    "//button[text()='×']",
+                    "//button[text()='Close']",
+                    "//div[contains(@class, 'modal')]//button",
+                    "//div[contains(@class, 'popup')]//button",
+                    "//div[contains(@class, 'overlay')]//button"
+                ]
+                
+                for selector in close_button_selectors:
+                    try:
+                        close_buttons = self.driver.find_elements(By.XPATH, selector)
+                        for button in close_buttons:
+                            if button.is_displayed() and button.is_enabled():
+                                logger.info(f"Found and clicking close button for '{page_name}': {selector}")
+                                button.click()
+                                time.sleep(1)
+                                break
+                    except Exception as close_error:
+                        # Continue to next selector if this one fails
+                        continue
+                        
+                # Additional wait after handling popups
+                time.sleep(3)
+                
+            except Exception as popup_error:
+                logger.warning(f"Error handling popups for '{page_name}': {str(popup_error)}")
+        
+        try:
+            logger.info(f"Processing page: '{page_name}'")
+            logger.info(f"Opening URL: {url}")
+            
+            # Navigate to the URL
+            self.driver.get(url)
+            time.sleep(5)  # Give more time for content to load
+            
+            # First attempt to extract ad count
+            result = try_extract_ad_count()
+            
+            if result is not None:
+                return result
+            
+            # If first attempt failed, handle popups and try again
+            logger.warning(f"Could not find ad count or 'No ads' message for '{page_name}' - attempting popup handling")
+            handle_popups_and_close_buttons()
+            
+            # Second attempt after handling popups
+            logger.info(f"Retrying ad count extraction after popup handling for '{page_name}'")
+            result = try_extract_ad_count()
+            
+            if result is not None:
+                logger.info(f"Successfully extracted ad count after popup handling for '{page_name}': {result}")
+                return result
+            else:
+                logger.warning(f"Still could not find ad count after popup handling for '{page_name}'")
+                return None
                 
         except Exception as e:
             logger.error(f"Error extracting ad count for '{page_name}': {str(e)}")
