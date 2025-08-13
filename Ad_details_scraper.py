@@ -1,349 +1,227 @@
-import os
-import time
-import logging
-import re
 from selenium import webdriver
+from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, NoSuchElementException, StaleElementReferenceException
+from selenium.common.exceptions import NoSuchElementException, TimeoutException
 from webdriver_manager.chrome import ChromeDriverManager
+import time
+import re
+from datetime import datetime
+from urllib.parse import urlparse, parse_qs
+from selenium.webdriver.common.keys import Keys
+import random
+import os
+import sys
+import logging
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
+import tempfile
+
+# Google Sheets imports
 import gspread
 from google.oauth2.service_account import Credentials
-from google.auth.exceptions import GoogleAuthError
 
-# Set up logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler("fb_ad_scraper.log"),
-        logging.StreamHandler()
-    ]
-)
+# ============== CONFIGURATION =====================
+# Setup logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-class FacebookAdScraper:
-    def __init__(self, sheet_name, worksheet_name, credentials_path="credentials.json"):
-        """Initialize the Facebook Ad Scraper.
+# Google Sheets configuration
+SCOPES = [
+    'https://www.googleapis.com/auth/spreadsheets',
+    'https://www.googleapis.com/auth/drive'
+]
+
+
+def get_google_sheets_client(credentials_file):
+    """
+    Initialize and return Google Sheets client.
+    """
+    try:
+        credentials = Credentials.from_service_account_file(
+            credentials_file, scopes=SCOPES
+        )
+        client = gspread.authorize(credentials)
+        return client
+    except Exception as e:
+        logger.error(f"Failed to initialize Google Sheets client: {e}")
+        return None
+
+
+def get_urls_from_sheets(sheet_name, worksheet_name, credentials_file):
+    """
+    Fetch URLs from Google Sheets from 'Page Transparency' column.
+    """
+    try:
+        client = get_google_sheets_client(credentials_file)
+        if not client:
+            return []
         
-        Args:
-            sheet_name (str): Name of the Google Sheets document
-            worksheet_name (str): Name of the worksheet/tab within the document
-            credentials_path (str): Path to Google API credentials
-        """
-        self.sheet_name = sheet_name
-        self.worksheet_name = worksheet_name
-        self.credentials_path = credentials_path
-        self.worksheet = None
-        self.driver = None
-        self.total_processed = 0
-        self.successful_processed = 0
-        self.failed_processed = 0
+        sheet = client.open(sheet_name)
+        worksheet = sheet.worksheet(worksheet_name)
         
-    def setup_google_sheets(self):
-        """Set up connection to Google Sheets."""
+        # Get all records from the worksheet
+        records = worksheet.get_all_records()
+        
+        # Extract URLs from 'Page Transparency' column
+        urls = []
+        for i, record in enumerate(records, start=2):  # Start from row 2 (header is row 1)
+            url = record.get('Page Transperancy ')  # Note: keeping original spelling
+            if url and url.strip():
+                urls.append((url.strip(), i))  # Store URL with row number
+        
+        logger.info(f"Retrieved {len(urls)} URLs from 'Page Transperancy ' column")
+        return urls
+        
+    except Exception as e:
+        logger.error(f"Error fetching URLs from Google Sheets: {e}")
+        return []
+
+
+def update_sheets_with_ad_count(sheet_name, worksheet_name, credentials_file, url, ad_count, competitor_name, row_number):
+    """
+    Update Google Sheets with ad count results and handle Zero Ads Streak.
+    """
+    try:
+        client = get_google_sheets_client(credentials_file)
+        if not client:
+            return False
+        
+        sheet = client.open(sheet_name)
+        worksheet = sheet.worksheet(worksheet_name)
+        
         try:
-            # Define the scope
-            scope = [
-                'https://www.googleapis.com/auth/spreadsheets',
-                'https://www.googleapis.com/auth/drive'
-            ]
+            # Find required columns
+            ad_count_col = worksheet.find('no.of ads By Ai').col
+            zero_streak_col = None
             
-            # Authenticate with Google
-            creds = Credentials.from_service_account_file(
-                self.credentials_path, scopes=scope
-            )
-            client = gspread.authorize(creds)
+            # Try to find Zero Ads Streak column, create if doesn't exist
+            try:
+                zero_streak_col = worksheet.find('Zero Ads Streak').col
+            except gspread.exceptions.CellNotFound:
+                # Add the column header if it doesn't exist
+                headers = worksheet.row_values(1)
+                new_col = len(headers) + 1
+                worksheet.update_cell(1, new_col, 'Zero Ads Streak')
+                zero_streak_col = new_col
+                logger.info("Created 'Zero Ads Streak' column")
             
-            # Open the spreadsheet by name and the specific worksheet
-            spreadsheet = client.open(self.sheet_name)
-            self.worksheet = spreadsheet.worksheet(self.worksheet_name)
+            # Update ad count
+            worksheet.update_cell(row_number, ad_count_col, ad_count)
             
-            logger.info(f"Successfully connected to Google Sheet: {self.sheet_name}, worksheet: {self.worksheet_name}")
+            # Handle Zero Ads Streak logic
+            current_streak = 0
+            try:
+                current_streak_value = worksheet.cell(row_number, zero_streak_col).value
+                current_streak = int(current_streak_value) if current_streak_value and current_streak_value.isdigit() else 0
+            except:
+                current_streak = 0
+            
+            if ad_count == 0:
+                # Increment streak
+                new_streak = current_streak + 1
+                worksheet.update_cell(row_number, zero_streak_col, new_streak)
+                logger.info(f"Updated Zero Ads Streak to {new_streak} for row {row_number}")
+                
+                # Delete row if streak reaches 30
+                if new_streak >= 30:
+                    worksheet.delete_rows(row_number)
+                    logger.info(f"Deleted row {row_number} after 30 consecutive days of zero ads")
+                    return True
+            else:
+                # Reset streak if ads > 0
+                if current_streak > 0:
+                    worksheet.update_cell(row_number, zero_streak_col, 0)
+                    logger.info(f"Reset Zero Ads Streak for row {row_number}")
+            
+            # Update last updated timestamp if column exists
+            try:
+                updated_col = worksheet.find('last_updated').col
+                worksheet.update_cell(row_number, updated_col, datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+            except gspread.exceptions.CellNotFound:
+                pass  # Column doesn't exist, skip
+            
+            logger.info(f"Updated ad count for {competitor_name}: {ad_count} (Row {row_number})")
             return True
             
-        except GoogleAuthError as e:
-            logger.error(f"Authentication error: {str(e)}")
+        except gspread.exceptions.CellNotFound as e:
+            logger.warning(f"Required column not found: {e}")
             return False
-        except Exception as e:
-            logger.error(f"Error setting up Google Sheets: {str(e)}")
-            return False
+        
+    except Exception as e:
+        logger.error(f"Error updating Google Sheets: {e}")
+        return False
+
+
+def extract_page_id(url):
+    """Extract page ID from Facebook Ads Library URL."""
+    parsed_url = urlparse(url)
+    query_params = parse_qs(parsed_url.query)
+    return query_params.get("view_all_page_id", [None])[0]
+
+
+def extract_ad_count_only(url_data, driver_path, sheet_name, worksheet_name, credentials_file):
+    """
+    Extract only the ad count from Facebook Ads Library page.
+    """
+    url, row_number = url_data  # Unpack URL and row number
+    driver = None
+    page_name = url[-30:]  # For logging
     
-    def setup_selenium(self):
-        """Set up Selenium WebDriver with Chrome in headless mode."""
-        try:
-            chrome_options = Options()
-            chrome_options.add_argument("--headless")
-            chrome_options.add_argument("--no-sandbox")
-            chrome_options.add_argument("--disable-dev-shm-usage")
-            chrome_options.add_argument("--disable-gpu")
-            chrome_options.add_argument("--window-size=1920,1080")
-            chrome_options.add_argument("--disable-notifications")
-            chrome_options.add_argument("--disable-infobars")
-            chrome_options.add_argument("--disable-extensions")
-            chrome_options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Safari/537.36")
-            
-            # Use webdriver_manager to handle ChromeDriver installation
-            service = Service(ChromeDriverManager().install())
-            self.driver = webdriver.Chrome(service=service, options=chrome_options)
-            logger.info("Selenium WebDriver initialized successfully")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Error setting up Selenium: {str(e)}")
-            return False
-    
-    def get_page_id_from_page(self, page_url, page_name):
-        """Navigate to the Facebook page, go to About section, and extract Page ID from transparency.
+    try:
+        logger.info(f"Starting ad count extraction for: {page_name}")
         
-        Args:
-            page_url (str): URL of the Facebook page
-            page_name (str): Name of the Facebook page
-            
-        Returns:
-            tuple: (page_id, transparency_url) or (None, None) if extraction fails
-        """
-        if not page_url or not isinstance(page_url, str):
-            logger.warning(f"Invalid page URL for '{page_name}': {page_url}")
-            return None, None
+        # --- Driver Setup ---
+        options = Options()
+        options.add_argument("--headless")
+        options.add_argument("--disable-gpu")
+        options.add_argument("--window-size=1920,1080")
+        options.add_argument("--log-level=3")
+        options.add_experimental_option('excludeSwitches', ['enable-logging'])
+        options.add_argument(f'--user-data-dir={tempfile.mkdtemp()}')
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-dev-shm-usage")
+
+        service = Service(executable_path=driver_path)
+        driver = webdriver.Chrome(service=service, options=options)
+        wait = WebDriverWait(driver, 15)
         
-        if not page_url.startswith("http"):
-            page_url = f"https://{page_url}" if not page_url.startswith("www.") else f"https://{page_url}"
+        driver.set_page_load_timeout(60)
+        driver.get(url)
         
-        try:
-            logger.info(f"Navigating to page URL for '{page_name}': {page_url}")
-            self.driver.get(page_url)
-            time.sleep(5)  # Allow page to fully load
-
-            # If already on the about_profile_transparency page, skip all clicking
-            if '/about_profile_transparency' not in page_url:
-                # Click on About tab
-                try:
-                    about_tab = WebDriverWait(self.driver, 15).until(
-                        EC.element_to_be_clickable((By.XPATH, "//a[contains(text(), 'About')]"))
-                    )
-                    self.driver.execute_script("arguments[0].click();", about_tab)  # JavaScript click for better reliability
-                    logger.info(f"Clicked on About tab for '{page_name}'")
-                    time.sleep(3)  # Wait for About page to load
-                except Exception as e:
-                    logger.warning(f"Could not click on About tab for '{page_name}': {str(e)}")
-                    # Try direct navigation to about page
-                    about_url = f"{page_url.rstrip('/')}/about"
-                    logger.info(f"Trying direct navigation to About page: {about_url}")
-                    self.driver.get(about_url)
-                    time.sleep(3)
-
-                # Click on Page transparency section
-                try:
-                    transparency_section = WebDriverWait(self.driver, 15).until(
-                        EC.element_to_be_clickable((By.XPATH, "//a[contains(text(), 'Page transparency') or contains(text(), 'Page Transparency')]"))
-                    )
-                    self.driver.execute_script("arguments[0].click();", transparency_section)  # JavaScript click
-                    logger.info(f"Clicked on Page transparency section for '{page_name}'")
-                    time.sleep(3)  # Wait for transparency info to load
-                except Exception as e:
-                    logger.warning(f"Could not click on Page transparency section for '{page_name}': {str(e)}")
-                    return None, None
-
-            # Extract Page ID using multiple methods for robustness
+        # Extract page ID and competitor name
+        current_page_id = extract_page_id(url)
+        
+        # Get competitor name from search box
+        competitor_name = "Unknown"
+        search_box_selectors = [
+            (By.CSS_SELECTOR, 'input[placeholder="Search by keyword or advertiser"][type="search"]'),
+            (By.XPATH, '//input[@type="search" and contains(@placeholder, "Search")]')
+        ]
+        
+        for by, value in search_box_selectors:
             try:
-                # Method 1: Using direct XPath - looking for a span near "Page ID" text
-                try:
-                    # First try to find "Page ID" label
-                    page_id_label = WebDriverWait(self.driver, 5).until(
-                        EC.presence_of_element_located((By.XPATH, "//div[contains(text(), 'Page ID')]"))
-                    )
-                    # Then find the actual ID (following sibling or nearby element)
-                    page_id_element = WebDriverWait(self.driver, 5).until(
-                        EC.presence_of_element_located((By.XPATH, "//div[contains(text(), 'Page ID')]/following-sibling::div"))
-                    )
-                    page_id = page_id_element.text.strip()
-                    logger.info(f"Method 1: Extracted Page ID for '{page_name}': {page_id}")
-                except (TimeoutException, NoSuchElementException, StaleElementReferenceException):
-                    page_id = None
-                
-                # Method 2: JavaScript method to extract content including pseudo-elements
-                if not page_id or not page_id.isdigit():
-                    try:
-                        # Look for any span that might contain the ID (numeric-only text)
-                        page_id = self.driver.execute_script("""
-                            // Try different selectors that might contain the page ID
-                            const selectors = [
-                                'span[class*="193iq5w"]',
-                                'span[dir="auto"]',
-                                'div[class*="xzsf02u"]',
-                                'div'  // As a last resort, check all divs for numeric content
-                            ];
-                            
-                            for (const selector of selectors) {
-                                const elements = document.querySelectorAll(selector);
-                                for (const el of elements) {
-                                    const text = el.textContent.trim();
-                                    // Looking for a numeric-only string that's likely to be an ID
-                                    if (/^\d{12,}$/.test(text)) {
-                                        return text;
-                                    }
-                                }
-                            }
-                            return null;
-                        """)
-                        if page_id:
-                            logger.info(f"Method 2: Extracted Page ID for '{page_name}': {page_id}")
-                    except Exception as js_error:
-                        logger.warning(f"JavaScript extraction failed: {str(js_error)}")
-                
-                # Method 3: Take a screenshot and log HTML if previous methods failed
-                if not page_id or not page_id.isdigit():
-                    # Save screenshot for debugging
-                    screenshot_path = f"debug_{page_name.replace(' ', '_')}.png"
-                    self.driver.save_screenshot(screenshot_path)
-                    logger.warning(f"Could not extract Page ID using standard methods. Screenshot saved to {screenshot_path}")
-                    
-                    # Get and log page HTML for manual inspection
-                    html = self.driver.page_source
-                    with open(f"debug_{page_name.replace(' ', '_')}.html", "w", encoding="utf-8") as f:
-                        f.write(html)
-                    
-                    # Final attempt: look for any numeric string that looks like an ID in the HTML
-                    id_match = re.search(r'>\s*(\d{12,})\s*<', html)
-                    if id_match:
-                        page_id = id_match.group(1)
-                        logger.info(f"Method 3: Extracted Page ID from HTML for '{page_name}': {page_id}")
-                
-                if page_id and page_id.isdigit():
-                    # Construct the transparency URL with the page ID
-                    transparency_url = f"https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=ALL&is_targeted_country=false&media_type=all&search_type=page&source=page-transparency-widget&view_all_page_id={page_id}"
-                    logger.info(f"Constructed transparency URL for '{page_name}': {transparency_url}")
-                    return page_id, transparency_url
-                else:
-                    logger.warning(f"Could not extract valid Page ID for '{page_name}'")
-                    return None, None
-                    
-            except Exception as e:
-                logger.warning(f"Could not extract Page ID for '{page_name}': {str(e)}")
-                return None, None
-                
-        except Exception as e:
-            logger.error(f"Error navigating to page URL for '{page_name}': {str(e)}")
-            return None, None
-    
-    def extract_ad_count(self, url, page_name):
-        """Extract ad count from a Facebook Page Transparency URL.
+                element = driver.find_element(by, value)
+                competitor_name = element.get_attribute("value")
+                if competitor_name:
+                    break
+            except NoSuchElementException:
+                continue
         
-        Args:
-            url (str): Facebook Page Transparency URL
-            page_name (str): Name of the Facebook page
-            
-        Returns:
-            int or None: Number of ads or None if extraction fails
-        """
-        if not url or not isinstance(url, str):
-            logger.warning(f"Invalid URL for page '{page_name}': {url}")
-            return None
-            
-        def try_extract_ad_count():
-            """Helper function to attempt ad count extraction."""
-            wait = WebDriverWait(self.driver, 15)
-            
-            # Wait for either the ad count element or "No ads" message
-            try:
-                # Try to find the exact element structure from the examples
-                try:
-                    # First try the exact structure from examples
-                    ad_count_element = wait.until(
-                        EC.presence_of_element_located((
-                            By.XPATH, 
-                            "//div[@role='heading' and @aria-level='3' and contains(@class, 'x8t9es0')]"
-                        ))
-                    )
-                    
-                    ad_count_text = ad_count_element.text.strip()
-                    logger.info(f"Found ad count text: {ad_count_text}")
-                    
-                    # Extract number using regex that handles all example cases
-                    match = re.search(r'[~]?(\d{1,3}(?:,\d{3})*|\d+)', ad_count_text)
-                    if match:
-                        ad_count = int(match.group(1).replace(',', ''))
-                        logger.info(f"Extracted ad count for '{page_name}': {ad_count}")
-                        return ad_count
-                    
-                    # If no numbers found, check for "0 results" case
-                    if '0 results' in ad_count_text:
-                        return 0
-                        
-                except Exception as e:
-                    logger.warning(f"Error with exact element match: {str(e)}")
-                
-                # Fallback to more general patterns if exact match fails
-                logger.info("Trying fallback patterns for ad count extraction")
-                
-                # Try to find any element containing 'results' text
-                try:
-                    results_elements = wait.until(
-                        EC.presence_of_all_elements_located((
-                            By.XPATH, 
-                            "//*[contains(text(), 'result')]"
-                        ))
-                    )
-                    
-                    for element in results_elements:
-                        try:
-                            text = element.text.strip()
-                            match = re.search(r'[~]?(\d{1,3}(?:,\d{3})*|\d+)\s+results?', text, re.IGNORECASE)
-                            if match:
-                                ad_count = int(match.group(1).replace(',', ''))
-                                logger.info(f"Fallback extracted ad count for '{page_name}': {ad_count}")
-                                return ad_count
-                        except:
-                            continue
-                            
-                except Exception as e:
-                    logger.warning(f"Fallback pattern failed: {str(e)}")
-                
-                logger.warning(f"Could not extract numeric ad count from page")
-                return None
-                    
-            except TimeoutException:
-                # Check if "No ads" message is present
-                try:
-                    no_ads_element = self.driver.find_element(By.XPATH, "//div[contains(text(), 'No ads')]")
-                    logger.info(f"Page '{page_name}' has no ads")
-                    return 0
-                except NoSuchElementException:
-                    # Try JavaScript as a last resort
-                    try:
-                        ad_count_text = self.driver.execute_script("""
-                            const elements = document.querySelectorAll('div');
-                            for (const el of elements) {
-                                const text = el.textContent.trim();
-                                if (text.includes('results') || text.includes('result')) {
-                                    return text;
-                                }
-                            }
-                            return null;
-                        """)
-                        
-                        if ad_count_text:
-                            matches = re.search(r'~?(\d+(?:,\d+)?)', ad_count_text)
-                            if matches:
-                                ad_count = int(matches.group(1).replace(',', ''))
-                                logger.info(f"JavaScript-extracted ad count for '{page_name}': {ad_count}")
-                                return ad_count
-                    except Exception as js_error:
-                        logger.warning(f"JavaScript ad count extraction failed: {str(js_error)}")
-                    
-                    return None
+        if competitor_name == "Unknown" and current_page_id:
+            competitor_name = f"Competitor_{current_page_id}"
         
+        logger.info(f"Competitor name: {competitor_name}")
+        
+        # Handle popups and close buttons
         def handle_popups_and_close_buttons():
             """Handle popups and close buttons that might interfere with ad count extraction."""
             try:
                 # Press ESC to close any popups
                 logger.info(f"Pressing ESC to close potential popups for '{page_name}'")
-                self.driver.find_element(By.TAG_NAME, 'body').send_keys(Keys.ESCAPE)
+                driver.find_element(By.TAG_NAME, 'body').send_keys(Keys.ESCAPE)
                 time.sleep(2)
                 
                 # Look for common close button patterns and click them
@@ -362,293 +240,217 @@ class FacebookAdScraper:
                 
                 for selector in close_button_selectors:
                     try:
-                        close_buttons = self.driver.find_elements(By.XPATH, selector)
+                        close_buttons = driver.find_elements(By.XPATH, selector)
                         for button in close_buttons:
                             if button.is_displayed() and button.is_enabled():
                                 logger.info(f"Found and clicking close button for '{page_name}': {selector}")
                                 button.click()
                                 time.sleep(1)
                                 break
-                    except Exception as close_error:
-                        # Continue to next selector if this one fails
+                    except Exception:
                         continue
-                        
-                # Additional wait after handling popups
-                time.sleep(3)
-                
-            except Exception as popup_error:
-                logger.warning(f"Error handling popups for '{page_name}': {str(popup_error)}")
+            except Exception as e:
+                logger.warning(f"Error handling popups: {e}")
         
-        try:
-            logger.info(f"Processing page: '{page_name}'")
-            logger.info(f"Opening URL: {url}")
-            
-            # Navigate to the URL
-            self.driver.get(url)
-            time.sleep(5)  # Give more time for content to load
-            
-            # First attempt to extract ad count
-            result = try_extract_ad_count()
-            
-            if result is not None:
-                return result
-            
-            # If first attempt failed, handle popups and try again
-            logger.warning(f"Could not find ad count or 'No ads' message for '{page_name}' - attempting popup handling")
-            handle_popups_and_close_buttons()
-            
-            # Second attempt after handling popups
-            logger.info(f"Retrying ad count extraction after popup handling for '{page_name}'")
-            result = try_extract_ad_count()
-            
-            if result is not None:
-                logger.info(f"Successfully extracted ad count after popup handling for '{page_name}': {result}")
-                return result
-            else:
-                logger.warning(f"Still could not find ad count after popup handling for '{page_name}'")
-                return None
-                
-        except Exception as e:
-            logger.error(f"Error extracting ad count for '{page_name}': {str(e)}")
-            return None
+        # Handle popups first
+        handle_popups_and_close_buttons()
         
-    def process_sheet(self):
-        """Process all rows in the Google Sheet."""
-        if not self.setup_google_sheets():
-            logger.error("Failed to set up Google Sheets. Exiting.")
-            return
-            
-        if not self.setup_selenium():
-            logger.error("Failed to set up Selenium. Exiting.")
-            return
-            
+        # Wait for either the ad count element or "No ads" message
         try:
-            # Get all values from the worksheet
-            all_values = self.worksheet.get_all_values()
-            
-            if not all_values:
-                logger.error("Worksheet is empty. Exiting.")
-                return
-                
-            # Get headers and find required columns
-            headers = all_values[0]
-            
+            # Try to find the exact element structure from the examples
             try:
-                # Handle column names carefully, stripping spaces
-                column_mapping = {header.strip().lower(): idx for idx, header in enumerate(headers)}
-
-                # Look for 'Page ' column (note the trailing space)
-                page_link_col_idx = None
-                for name in ["page", "page ", "page link", "page link "]:
-                    if name in column_mapping:
-                        page_link_col_idx = column_mapping[name]
-                        break
-
-                url_col_idx = None
-                for name in ["page transperancy", "page transperancy ", "page transparency", "page transparency "]:
-                    if name in column_mapping:
-                        url_col_idx = column_mapping[name]
-                        break
-                        
-                # Look for ads count column
-                ads_col_idx = None
-                for name in ["no.of ads by ai", "ads count", "ads"]:
-                    if name in column_mapping:
-                        ads_col_idx = column_mapping[name]
-                        break
-                        
-                # Look for Zero Ads Streak column
-                streak_col_idx = None
-                for name in ["zero ads streak", "streak"]:
-                    if name in column_mapping:
-                        streak_col_idx = column_mapping[name]
-                        break
-
-                # Last resort: try to find columns by position or partial match
-                if page_link_col_idx is None:
-                    for idx, header in enumerate(headers):
-                        if "page" in header.lower() and ("link" in header.lower() or header.strip().lower() == "page"):
-                            page_link_col_idx = idx
-                            break
-
-                if url_col_idx is None:
-                    for idx, header in enumerate(headers):
-                        if "transperancy" in header.lower() or "transparency" in header.lower():
-                            url_col_idx = idx
-                            break
-                            
-                if ads_col_idx is None:
-                    for idx, header in enumerate(headers):
-                        if "ads" in header.lower() and "ai" in header.lower():
-                            ads_col_idx = idx
-                            break
-                            
-                if streak_col_idx is None:
-                    for idx, header in enumerate(headers):
-                        if "streak" in header.lower() and "zero" in header.lower():
-                            streak_col_idx = idx
-                            break
-
-                # Check if required columns are found
-                missing_columns = []
-                if page_link_col_idx is None:
-                    missing_columns.append("Page column (looking for 'Page ' or 'Page link')")
-                if url_col_idx is None:
-                    missing_columns.append("Page Transperancy column")
-                if ads_col_idx is None:
-                    missing_columns.append("Ads count column (looking for 'no.of ads By Ai')")
-                if streak_col_idx is None:
-                    missing_columns.append("Zero Ads Streak column")
-                    
-                if missing_columns:
-                    logger.error(f"Required columns not found: {', '.join(missing_columns)}")
-                    logger.error(f"Available columns are: {headers}")
-                    logger.error("Please ensure your sheet has the correct column headers.")
-                    return
-                    
-                logger.info(f"Found columns - Page: {page_link_col_idx}, Transperancy: {url_col_idx}, Ads: {ads_col_idx}, Streak: {streak_col_idx}")
-
-                logger.info(f"Found Page link column at index {page_link_col_idx}")
-                logger.info(f"Found Page Transparency column at index {url_col_idx}")
-
-            except ValueError as e:
-                logger.error(f"Required columns not found in the worksheet: {str(e)}")
-                # Print available columns to help debug
-                logger.error(f"Available columns are: {headers}")
-                return
+                # First try the exact structure from examples
+                ad_count_element = wait.until(
+                    EC.presence_of_element_located((
+                        By.XPATH, 
+                        "//div[@role='heading' and @aria-level='3' and contains(@class, 'x8t9es0')]"
+                    ))
+                )
                 
-            # Check if "no.of ads By Ai" column exists, add if it doesn't
-            ads_col_idx = None
-            for idx, header in enumerate(headers):
-                if "no.of ads by ai" in header.lower():
-                    ads_col_idx = idx
-                    break
+                ad_count_text = ad_count_element.text.strip()
+                logger.info(f"Found ad count text: {ad_count_text}")
+                
+                # Extract number using regex that handles all example cases
+                match = re.search(r'[~]?(\d{1,3}(?:,\d{3})*|\d+)', ad_count_text)
+                if match:
+                    ad_count = int(match.group(1).replace(',', ''))
+                    logger.info(f"Extracted ad count for '{page_name}': {ad_count}")
                     
-            if ads_col_idx is None:
-                ads_col_idx = len(headers)
-                self.worksheet.update_cell(1, ads_col_idx + 1, "no.of ads By Ai")
-                logger.info("Added 'no.of ads By Ai' column")
+                    # Update Google Sheets
+                    update_sheets_with_ad_count(sheet_name, worksheet_name, credentials_file, url, ad_count, competitor_name, row_number)
+                    return ad_count
+                
+                # If no numbers found, check for "0 results" case
+                if '0 results' in ad_count_text:
+                    update_sheets_with_ad_count(sheet_name, worksheet_name, credentials_file, url, 0, competitor_name, row_number)
+                    return 0
+                    
+            except Exception as e:
+                logger.warning(f"Error with exact element match: {str(e)}")
             
-            # Check if "Last Update Time" column exists, add if it doesn't
-            time_col_idx = None
-            for idx, header in enumerate(headers):
-                if "last update time" in header.lower():
-                    time_col_idx = idx
-                    break
-                    
-            if time_col_idx is None:
-                time_col_idx = len(headers) + (1 if ads_col_idx == len(headers) else 0)
-                self.worksheet.update_cell(1, time_col_idx + 1, "Last Update Time")
-                logger.info("Added 'Last Update Time' column")
-
-            # Process each row starting from the second row (index 1)
-            for row_idx, row in enumerate(all_values[1:], start=2):  # Start from 2 because sheets are 1-indexed and we skip headers
+            # Fallback to more general patterns if exact match fails
+            logger.info("Trying fallback patterns for ad count extraction")
+            
+            # Try to find any element containing 'results' text
+            try:
+                results_elements = wait.until(
+                    EC.presence_of_all_elements_located((
+                        By.XPATH, 
+                        "//*[contains(text(), 'result')]"
+                    ))
+                )
+                
+                for element in results_elements:
+                    try:
+                        text = element.text.strip()
+                        match = re.search(r'[~]?(\d{1,3}(?:,\d{3})*|\d+)\s+results?', text, re.IGNORECASE)
+                        if match:
+                            ad_count = int(match.group(1).replace(',', ''))
+                            logger.info(f"Fallback extracted ad count for '{page_name}': {ad_count}")
+                            
+                            # Update Google Sheets
+                            update_sheets_with_ad_count(sheet_name, worksheet_name, credentials_file, url, ad_count, competitor_name, row_number)
+                            return ad_count
+                    except:
+                        continue
+                        
+            except Exception as e:
+                logger.warning(f"Fallback pattern failed: {str(e)}")
+            
+            logger.warning(f"Could not extract numeric ad count from page")
+            return None
+                
+        except TimeoutException:
+            # Check if "No ads" message is present
+            try:
+                no_ads_element = driver.find_element(By.XPATH, "//div[contains(text(), 'No ads')]")
+                logger.info(f"Page '{page_name}' has no ads")
+                update_sheets_with_ad_count(sheet_name, worksheet_name, credentials_file, url, 0, competitor_name, row_number)
+                return 0
+            except NoSuchElementException:
+                # Try JavaScript as a last resort
                 try:
-                    # Skip rows that don't have enough columns
-                    if len(row) <= max(page_link_col_idx, url_col_idx):
-                        logger.warning(f"Row {row_idx} has insufficient columns. Skipping.")
-                        self.failed_processed += 1
-                        continue
+                    ad_count_text = driver.execute_script("""
+                        const elements = document.querySelectorAll('div');
+                        for (const el of elements) {
+                            const text = el.textContent.trim();
+                            if (text.includes('results') || text.includes('result')) {
+                                return text;
+                            }
+                        }
+                        return null;
+                    """)
+                    
+                    if ad_count_text:
+                        matches = re.search(r'~?(\d+(?:,\d+)?)', ad_count_text)
+                        if matches:
+                            ad_count = int(matches.group(1).replace(',', ''))
+                            logger.info(f"JavaScript-extracted ad count for '{page_name}': {ad_count}")
+                            
+                            # Update Google Sheets
+                            update_sheets_with_ad_count(sheet_name, worksheet_name, credentials_file, url, ad_count, competitor_name, row_number)
+                            return ad_count
+                except Exception as js_error:
+                    logger.warning(f"JavaScript ad count extraction failed: {str(js_error)}")
+                
+                return None
+    
+    except Exception as e:
+        logger.error(f"Error extracting ad count from {page_name}: {str(e)}")
+        return None
+    
+    finally:
+        if driver:
+            try:
+                driver.quit()
+            except Exception as e:
+                logger.warning(f"Error closing driver: {e}")
 
-                    # Get page link from 'Page link' column only
-                    page_link = row[page_link_col_idx] if page_link_col_idx < len(row) else ""
-                    transparency_url = row[url_col_idx] if url_col_idx < len(row) else ""
 
-                    # Rule 1: If Page Transperancy is blank and Page link is not blank
-                    if not transparency_url.strip() and page_link.strip():
-                        about_transparency_url = f"{page_link.rstrip('/')}/about_profile_transparency"
-                        logger.info(f"Row {row_idx}: Page Transperancy is blank, visiting {about_transparency_url} to extract page id.")
-                        page_id, constructed_url = self.get_page_id_from_page(about_transparency_url, page_link)
-                        if page_id and constructed_url:
-                            logger.info(f"Extracted Page ID for row {row_idx}: {page_id}")
-                            logger.info(f"Constructed transparency URL for row {row_idx}: {constructed_url}")
-                            self.worksheet.update_cell(row_idx, url_col_idx + 1, constructed_url)
-                            logger.info(f"Updated Page Transperancy for row {row_idx} with {constructed_url}")
-                            transparency_url = constructed_url  # Use this for ad count extraction
-                        else:
-                            logger.warning(f"Could not extract page id for row {row_idx} from {about_transparency_url}")
-                            self.failed_processed += 1
-                            continue
-                    # Rule 2: If both are blank, skip
-                    elif not page_link.strip() and not transparency_url.strip():
-                        logger.warning(f"Both Page link and Page Transperancy are blank at row {row_idx}. Skipping.")
-                        self.failed_processed += 1
-                        continue
-                    # Rule 3: If Page Transperancy is not blank, use it directly
-                    # (no action needed, just proceed)
-
-                    # Extract ad count using the (possibly updated) transparency_url
-                    ad_count = self.extract_ad_count(transparency_url, page_link or f"Row {row_idx}")
-
-                    # Update the sheet
-                    if ad_count is not None:
-                        # Write to the ads column
-                        self.worksheet.update_cell(row_idx, ads_col_idx + 1, ad_count)
-                        
-                        # Update the Last Update Time column with current timestamp
-                        current_time = time.strftime("%Y-%m-%d %H:%M:%S")
-                        self.worksheet.update_cell(row_idx, time_col_idx + 1, current_time)
-                        
-                        # Update Zero Ads Streak
-                        if streak_col_idx is not None:
-                            if ad_count > 0:
-                                self.worksheet.update_cell(row_idx, streak_col_idx + 1, 0)
-                                logger.info(f"Reset Zero Ads Streak for row {row_idx}")
-                            else:
-                                try:
-                                    current_streak = int(all_values[row_idx - 1][streak_col_idx] or 0)
-                                    new_streak = current_streak + 1
-                                    
-                                    if new_streak > 30:
-                                        self.worksheet.delete_rows(row_idx)
-                                        logger.info(f"Deleted row {row_idx} - Zero Ads Streak exceeded 30")
-                                    else:
-                                        self.worksheet.update_cell(row_idx, streak_col_idx + 1, new_streak)
-                                        logger.info(f"Incremented Zero Ads Streak for row {row_idx} to {new_streak}")
-                                except Exception as e:
-                                    self.worksheet.update_cell(row_idx, streak_col_idx + 1, 1)
-                                    logger.warning(f"Could not read streak for row {row_idx}, setting to 1. Error: {e}")
-                        
-                        logger.info(f"Updated ad count for row {row_idx}: {ad_count} and timestamp: {current_time}")
-                        self.successful_processed += 1
-                    else:
-                        logger.warning(f"Failed to extract ad count for row {row_idx}")
-                        self.failed_processed += 1
-                    # Add delay to avoid rate limiting
-                    time.sleep(2)
-                except Exception as e:
-                    logger.error(f"Error processing row {row_idx}: {str(e)}")
-                    self.failed_processed += 1
-                self.total_processed += 1
-
-            logger.info(f"Processing complete. Processed {self.total_processed} URLs "
-                        f"({self.successful_processed} successful, {self.failed_processed} failed).")
-
+def process_urls_from_sheets(sheet_name, worksheet_name, credentials_file, max_workers=2):
+    """
+    Process URLs from Google Sheets to extract ad counts.
+    """
+    try:
+        # Get URLs from Google Sheets
+        urls = get_urls_from_sheets(sheet_name, worksheet_name, credentials_file)
+        
+        if not urls:
+            logger.warning("No URLs found in Google Sheets")
+            return
+        
+        logger.info(f"Processing {len(urls)} URLs from Google Sheets")
+        
+        # Pre-install WebDriver
+        try:
+            driver_executable_path = ChromeDriverManager().install()
+            logger.info(f"WebDriver installed at: {driver_executable_path}")
         except Exception as e:
-            logger.error(f"Error processing worksheet: {str(e)}")
-        finally:
-            if self.driver:
-                self.driver.quit()
-                logger.info("WebDriver closed")
+            logger.error(f"Failed to install Chrome Driver: {e}")
+            return
+        
+        # Process URLs in parallel
+        start_time = time.time()
+        
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Create partial function with all required parameters
+            extract_task = partial(
+                extract_ad_count_only, 
+                driver_path=driver_executable_path,
+                sheet_name=sheet_name,
+                worksheet_name=worksheet_name,
+                credentials_file=credentials_file
+            )
+            
+            # Map URLs to extraction tasks
+            results = list(executor.map(extract_task, urls))
+        
+        end_time = time.time()
+        total_time = end_time - start_time
+        
+        # Summary
+        successful_extractions = sum(1 for result in results if result is not None)
+        logger.info(f"Processing complete. {successful_extractions}/{len(urls)} URLs processed successfully in {total_time:.2f} seconds")
+        
+    except Exception as e:
+        logger.error(f"Error processing URLs from sheets: {e}")
+
 
 def main():
-    """Main function to run the scraper."""
-    import argparse
+    """Main function to run the scraper - configured for GitHub Actions."""
     
-    parser = argparse.ArgumentParser(description='Facebook Ad Scraper')
-    parser.add_argument('--sheet_name', default='Debt 2025 Swipe File ',
-                        help='Name of the Google Sheets document (default: Debt 2025 Swipe File )')
-    parser.add_argument('--worksheet_name', default='Milk',
-                        help='Name of the worksheet/tab within the document (default: Milk)')
-    parser.add_argument('--credentials', default='credentials.json', 
-                        help='Path to Google API credentials file (default: credentials.json)')
+    # Default configuration for GitHub Actions
+    sheet_name = 'Debt 2025 Swipe File '
+    worksheet_name = 'Milk'
+    credentials_file = 'credentials.json'
+    max_workers = int(os.getenv("MAX_WORKERS", "2"))  # Allow override via environment variable
     
-    args = parser.parse_args()
+    logger.info("Starting Facebook Ad Count Scraper (GitHub Actions Mode)")
+    logger.info(f"Sheet: {sheet_name}")
+    logger.info(f"Worksheet: {worksheet_name}")
+    logger.info(f"Credentials: {credentials_file}")
+    logger.info(f"Max Workers: {max_workers}")
     
-    logger.info("Starting Facebook Ad Scraper")
-    scraper = FacebookAdScraper(args.sheet_name, args.worksheet_name, args.credentials)
-    scraper.process_sheet()
-    logger.info("Facebook Ad Scraper completed")
+    # Check if credentials file exists
+    if not os.path.exists(credentials_file):
+        logger.error(f"Credentials file not found: {credentials_file}")
+        logger.error("Please ensure credentials.json is available in the repository")
+        sys.exit(1)
+    
+    try:
+        # Process URLs from Google Sheets
+        process_urls_from_sheets(
+            sheet_name=sheet_name,
+            worksheet_name=worksheet_name,
+            credentials_file=credentials_file,
+            max_workers=max_workers
+        )
+        logger.info("Script completed successfully")
+        
+    except Exception as e:
+        logger.error(f"Script failed with error: {e}")
+        sys.exit(1)
+
 
 if __name__ == "__main__":
     main()
