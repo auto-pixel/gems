@@ -18,6 +18,8 @@ import logging
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 import tempfile
+import threading
+from collections import deque
 
 # Google Sheets imports
 import gspread
@@ -33,6 +35,114 @@ SCOPES = [
     'https://www.googleapis.com/auth/spreadsheets',
     'https://www.googleapis.com/auth/drive'
 ]
+
+# Rate limiting configuration
+RATE_LIMIT_DELAY = 2.0  # seconds between API calls
+BATCH_SIZE = 5  # number of updates per batch
+MAX_RETRIES = 5  # maximum retry attempts for 429 errors
+
+# Global variables for rate limiting and batch processing
+api_call_lock = threading.Lock()
+pending_updates = deque()
+last_api_call_time = 0
+
+
+def rate_limited_api_call(func, *args, **kwargs):
+    """
+    Execute API call with rate limiting and retry logic for 429 errors.
+    """
+    global last_api_call_time
+    
+    with api_call_lock:
+        # Ensure minimum delay between API calls
+        current_time = time.time()
+        time_since_last_call = current_time - last_api_call_time
+        if time_since_last_call < RATE_LIMIT_DELAY:
+            sleep_time = RATE_LIMIT_DELAY - time_since_last_call
+            time.sleep(sleep_time)
+        
+        # Retry logic for 429 errors
+        for attempt in range(MAX_RETRIES):
+            try:
+                result = func(*args, **kwargs)
+                last_api_call_time = time.time()
+                return result
+            except Exception as e:
+                if "429" in str(e) or "RATE_LIMIT_EXCEEDED" in str(e):
+                    if attempt < MAX_RETRIES - 1:
+                        wait_time = (2 ** attempt) * RATE_LIMIT_DELAY  # Exponential backoff
+                        logger.warning(f"Rate limit hit, retrying in {wait_time} seconds (attempt {attempt + 1}/{MAX_RETRIES})")
+                        time.sleep(wait_time)
+                        continue
+                    else:
+                        logger.error(f"Max retries reached for rate limit error: {e}")
+                        raise
+                else:
+                    # Non-rate-limit error, raise immediately
+                    raise
+        
+        return None
+
+
+def batch_update_sheets(worksheet, updates):
+    """
+    Perform batch updates to reduce API calls.
+    """
+    if not updates:
+        return True
+    
+    try:
+        # Process individual cell updates with rate limiting
+        for update in updates:
+            if update['type'] == 'cell':
+                rate_limited_api_call(
+                    worksheet.update_cell,
+                    update['row'],
+                    update['col'],
+                    update['value']
+                )
+        
+        logger.info(f"Batch updated {len(updates)} cells")
+        return True
+    except Exception as e:
+        logger.error(f"Error in batch update: {e}")
+        return False
+
+
+def queue_update(row, col, value, update_type='cell'):
+    """
+    Queue an update for batch processing.
+    """
+    pending_updates.append({
+        'type': update_type,
+        'row': row,
+        'col': col,
+        'value': value
+    })
+    
+    # Note: We'll process batches manually in flush_pending_updates
+    # to have better control over when updates are sent
+
+
+def flush_pending_updates(worksheet=None):
+    """
+    Process all pending updates in batches.
+    """
+    global pending_updates
+    
+    if not pending_updates or not worksheet:
+        return
+    
+    # Process updates in batches
+    while pending_updates:
+        batch = []
+        for _ in range(min(BATCH_SIZE, len(pending_updates))):
+            if pending_updates:
+                batch.append(pending_updates.popleft())
+        
+        if batch:
+            batch_update_sheets(worksheet, batch)
+            time.sleep(RATE_LIMIT_DELAY)  # Delay between batches
 
 
 def get_google_sheets_client(credentials_file):
@@ -62,8 +172,8 @@ def get_urls_from_sheets(sheet_name, worksheet_name, credentials_file):
         sheet = client.open(sheet_name)
         worksheet = sheet.worksheet(worksheet_name)
         
-        # Get all records from the worksheet
-        records = worksheet.get_all_records()
+        # Get all records from the worksheet with rate limiting
+        records = rate_limited_api_call(worksheet.get_all_records)
         
         # Extract URLs from 'Page Transparency' column
         urls = []
@@ -83,6 +193,7 @@ def get_urls_from_sheets(sheet_name, worksheet_name, credentials_file):
 def update_sheets_with_ad_count(sheet_name, worksheet_name, credentials_file, url, ad_count, competitor_name, row_number):
     """
     Update Google Sheets with ad count results and handle Zero Ads Streak.
+    Match by exact Page Transparency URL instead of row number.
     """
     try:
         client = get_google_sheets_client(credentials_file)
@@ -93,28 +204,62 @@ def update_sheets_with_ad_count(sheet_name, worksheet_name, credentials_file, ur
         worksheet = sheet.worksheet(worksheet_name)
         
         try:
-            # Find required columns
-            ad_count_col = worksheet.find('no.of ads By Ai').col
+            # Find the Page Transparency column first to match the exact URL
+            page_transparency_col = None
+            try:
+                page_transparency_col = rate_limited_api_call(worksheet.find, 'Page Transperancy ').col
+            except gspread.exceptions.CellNotFound:
+                logger.error("'Page Transperancy ' column not found")
+                return False
+            
+            # Find the row that matches the exact URL
+            all_records = rate_limited_api_call(worksheet.get_all_records)
+            target_row = None
+            
+            for i, record in enumerate(all_records, start=2):  # Start from row 2 (header is row 1)
+                sheet_url = record.get('Page Transperancy ', '').strip()
+                if sheet_url == url.strip():
+                    target_row = i
+                    break
+            
+            if target_row is None:
+                logger.warning(f"URL not found in Page Transparency column: {url}")
+                return False
+            
+            logger.info(f"Found matching URL at row {target_row}: {url}")
+            
+            # Find required columns with rate limiting
+            ad_count_col = rate_limited_api_call(worksheet.find, 'no.of ads By Ai').col
             zero_streak_col = None
+            updated_col = None
             
             # Try to find Zero Ads Streak column, create if doesn't exist
             try:
-                zero_streak_col = worksheet.find('Zero Ads Streak').col
+                zero_streak_col = rate_limited_api_call(worksheet.find, 'Zero Ads Streak').col
             except gspread.exceptions.CellNotFound:
                 # Add the column header if it doesn't exist
-                headers = worksheet.row_values(1)
+                headers = rate_limited_api_call(worksheet.row_values, 1)
                 new_col = len(headers) + 1
-                worksheet.update_cell(1, new_col, 'Zero Ads Streak')
+                rate_limited_api_call(worksheet.update_cell, 1, new_col, 'Zero Ads Streak')
                 zero_streak_col = new_col
                 logger.info("Created 'Zero Ads Streak' column")
             
-            # Update ad count
-            worksheet.update_cell(row_number, ad_count_col, ad_count)
+            # Try to find Last Update Time column
+            try:
+                updated_col = rate_limited_api_call(worksheet.find, 'Last Update Time').col
+            except gspread.exceptions.CellNotFound:
+                logger.warning("'Last Update Time' column not found, skipping timestamp update")
+            
+            # Prepare batch updates
+            updates_to_queue = []
+            
+            # Queue ad count update
+            queue_update(target_row, ad_count_col, ad_count)
             
             # Handle Zero Ads Streak logic
             current_streak = 0
             try:
-                current_streak_value = worksheet.cell(row_number, zero_streak_col).value
+                current_streak_value = rate_limited_api_call(worksheet.cell, target_row, zero_streak_col).value
                 current_streak = int(current_streak_value) if current_streak_value and current_streak_value.isdigit() else 0
             except:
                 current_streak = 0
@@ -122,28 +267,32 @@ def update_sheets_with_ad_count(sheet_name, worksheet_name, credentials_file, ur
             if ad_count == 0:
                 # Increment streak
                 new_streak = current_streak + 1
-                worksheet.update_cell(row_number, zero_streak_col, new_streak)
-                logger.info(f"Updated Zero Ads Streak to {new_streak} for row {row_number}")
+                queue_update(target_row, zero_streak_col, new_streak)
+                logger.info(f"Updated Zero Ads Streak to {new_streak} for row {target_row}")
                 
                 # Delete row if streak reaches 30
                 if new_streak >= 30:
-                    worksheet.delete_rows(row_number)
-                    logger.info(f"Deleted row {row_number} after 30 consecutive days of zero ads")
+                    # Flush pending updates first
+                    flush_pending_updates(worksheet)
+                    rate_limited_api_call(worksheet.delete_rows, target_row)
+                    logger.info(f"Deleted row {target_row} after 30 consecutive days of zero ads")
                     return True
             else:
                 # Reset streak if ads > 0
                 if current_streak > 0:
-                    worksheet.update_cell(row_number, zero_streak_col, 0)
-                    logger.info(f"Reset Zero Ads Streak for row {row_number}")
+                    queue_update(target_row, zero_streak_col, 0)
+                    logger.info(f"Reset Zero Ads Streak for row {target_row}")
             
-            # Update last updated timestamp if column exists
-            try:
-                updated_col = worksheet.find('last_updated').col
-                worksheet.update_cell(row_number, updated_col, datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
-            except gspread.exceptions.CellNotFound:
-                pass  # Column doesn't exist, skip
+            # Queue Last Update Time timestamp update if column exists
+            if updated_col:
+                current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                queue_update(target_row, updated_col, current_time)
+                logger.info(f"Queued Last Update Time update to {current_time} for row {target_row}")
             
-            logger.info(f"Updated ad count for {competitor_name}: {ad_count} (Row {row_number})")
+            # Process any remaining updates in the queue
+            flush_pending_updates(worksheet)
+            
+            logger.info(f"Updated ad count for {competitor_name}: {ad_count} (Row {target_row}) - URL: {url}")
             return True
             
         except gspread.exceptions.CellNotFound as e:
@@ -407,6 +556,18 @@ def process_urls_from_sheets(sheet_name, worksheet_name, credentials_file, max_w
         
         end_time = time.time()
         total_time = end_time - start_time
+        
+        # Final flush of any remaining pending updates
+        if pending_updates:
+            try:
+                client = get_google_sheets_client(credentials_file)
+                if client:
+                    sheet = client.open(sheet_name)
+                    worksheet = sheet.worksheet(worksheet_name)
+                    flush_pending_updates(worksheet)
+                    logger.info("Flushed remaining pending updates")
+            except Exception as e:
+                logger.error(f"Error flushing final updates: {e}")
         
         # Summary
         successful_extractions = sum(1 for result in results if result is not None)
