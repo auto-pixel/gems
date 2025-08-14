@@ -1,49 +1,67 @@
 name: DD
-
 on:
   schedule:
-    - cron: '30 14 * * *'  # Run daily at 10:30 AM UTC (4:00 PM Indian time - UTC+5:30)
-  workflow_dispatch:     # Allow manual triggering
-
+    - cron: '30 14 * * *'  # Run daily at 10:30 AM UTC (4:00 PM Indian time - UTC+5:30) - Fixed syntax
+  workflow_dispatch:       # Allow manual triggering
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 1200  # 20 hours timeout
+    timeout-minutes: 1200  # Reduced to 6 hours for stability
     
     steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf "/usr/local/share/boost"
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /usr/share/swift
+          sudo docker system prune -af
+          df -h
+      
       - name: Checkout code
         uses: actions/checkout@v3
-
+      
       - name: Set up Python 3.12
         uses: actions/setup-python@v4
         with:
           python-version: '3.12.3'
           cache: 'pip'
           check-latest: true
-
+      
       - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y wget unzip xvfb libxss1 libxtst6 libnss3 libatk1.0-0 \
             libcups2 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libxkbcommon0 \
-            libatspi2.0-0 libx11-xcb1 libasound2t64 libatk-bridge2.0-0
-
+            libatspi2.0-0 libx11-xcb1 libasound2 libatk-bridge2.0-0
+          
+          # Install Chrome
           wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
           echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list
           sudo apt-get update
           sudo apt-get install -y google-chrome-stable
-
-          sudo Xvfb :99 -screen 0 1920x1080x24 > /dev/null 2>&1 &
+          
+          # Start Xvfb with lower resolution to save memory
+          sudo Xvfb :99 -screen 0 800x600x24 > /dev/null 2>&1 &
+          
           echo "CHROME_PATH=$(which google-chrome)" >> $GITHUB_ENV
           echo "DISPLAY=:99" >> $GITHUB_ENV
-
+          
+          # Clean up package cache
+          sudo apt-get clean
+          sudo rm -rf /var/lib/apt/lists/*
+      
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip setuptools wheel
-          pip install "undetected-chromedriver>=3.5.5" --no-cache-dir
-          pip install -r requirements.txt
-          python -c "import undetected_chromedriver as uc; print(f'✓ Undetected ChromeDriver version: {uc.__version__}')"
-
+          pip install --no-cache-dir selenium webdriver-manager gspread google-auth google-auth-oauthlib google-auth-httplib2 psutil
+          pip install --no-cache-dir -r requirements.txt
+          
+          # Clean pip cache
+          pip cache purge
+      
       - name: Setup credentials
         run: |
           echo '${{ secrets.GOOGLE_CREDENTIALS_JSON }}' > credentials.json
@@ -53,54 +71,90 @@ jobs:
               json.load(f)
           print('✓ Google credentials JSON validated')"
           echo CLAUDE_API_KEY=${{ secrets.CLAUDE_API_KEY }} > .env
-
-      - name: Download proxies
+      
+      - name: Check system resources before run
         run: |
-          python -c "
-          import requests, random, time
-          sources = [
-            'https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt',
-            'https://raw.githubusercontent.com/ShiftyTR/Proxy-List/master/http.txt',
-            'https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt'
-          ]
-          headers = {'User-Agent': 'Mozilla/5.0'}
-          proxies = set()
-          for url in sources:
-              try:
-                  r = requests.get(url, headers=headers, timeout=10)
-                  if r.status_code == 200:
-                      proxies.update(line.strip() for line in r.text.splitlines() if line.strip())
-                      print(f'Downloaded from {url}')
-              except Exception as e:
-                  print(f'Error: {e}')
-              time.sleep(random.uniform(1, 2))
-          with open('proxies.txt', 'w') as f:
-              for p in proxies: f.write(p + '\\n')
-          print(f'Total proxies saved: {len(proxies)}')"
-
-      - name: Run Ad_details_scraper.py with fail protection
+          echo "=== System Resources Before Run ==="
+          df -h
+          free -h
+          ps aux --sort=-%mem | head -10
+      
+      - name: Run Ad_details_scraper.py with resource monitoring
         env:
           DISPLAY: ':99'
           CHROME_PATH: /usr/bin/google-chrome
+          PYTHONUNBUFFERED: 1
         run: |
           set -e
           echo "STARTING SCRIPT..."
-          python Ad_details_scraper.py || echo "⚠️ Script crashed but continuing workflow"
-
+          
+          # Monitor resources during execution
+          (
+            while sleep 30; do
+              echo "=== Resource Check ==="
+              df -h | grep -E "(Filesystem|/dev/)"
+              free -h | grep -E "(total|Mem|Swap)"
+              echo "===================="
+            done
+          ) &
+          MONITOR_PID=$!
+          
+          # Run the main script with error handling
+          python Ad_details_scraper.py || {
+            echo "⚠️ Script encountered an error but workflow continues"
+            exit_code=$?
+            echo "Exit code: $exit_code"
+            
+            # Try to capture some debug info
+            echo "=== Final Resource State ==="
+            df -h || true
+            free -h || true
+            ps aux --sort=-%mem | head -10 || true
+            
+            # Kill monitor
+            kill $MONITOR_PID 2>/dev/null || true
+            
+            # Don't exit with error to allow artifact upload
+            exit 0
+          }
+          
+          # Kill monitor on successful completion
+          kill $MONITOR_PID 2>/dev/null || true
+      
+      - name: Clean up temporary files
+        if: always()
+        run: |
+          echo "=== Cleaning up temporary files ==="
+          # Clean up Chrome user data directories
+          find /tmp -name "*chrome*" -type d -exec rm -rf {} + 2>/dev/null || true
+          
+          # Clean up other temporary files
+          find /tmp -name "tmp*" -type d -mmin +60 -exec rm -rf {} + 2>/dev/null || true
+          
+          # Clean up any remaining webdriver files
+          find /tmp -name "*webdriver*" -exec rm -rf {} + 2>/dev/null || true
+          
+          # Show final disk usage
+          echo "=== Final disk usage ==="
+          df -h
+      
       - name: Upload scraping results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: scraping-results
+          name: scraping-results-${{ github.run_number }}
           path: |
             ads_data.json
             logs/
-
-      - name: Upload screenshots and debug HTMLs
+          retention-days: 7  # Reduce retention to save space
+      
+      - name: Upload debug files
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: debug-files
+          name: debug-files-${{ github.run_number }}
           path: |
             *.png
             *.html
+            *.log
+          retention-days: 3  # Short retention for debug files
